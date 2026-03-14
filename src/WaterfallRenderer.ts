@@ -211,8 +211,8 @@ export class WaterfallRenderer {
 
     if (this.timeBuffer) {
       this.timeBuffer.copyWithin(rowH, 0, this.rowCount - rowH)
-      const now = Date.now()
-      this.timeBuffer.fill(now, 0, rowH)
+      const ts = f.header[0] ? new Date(f.header[0].timestamp).getTime() : Date.now()
+      this.timeBuffer.fill(ts, 0, rowH)
     }
     if (this.valueBuffer) {
       this.valueBuffer.copyWithin(ringW * rowH, 0, ringW * (this.rowCount - rowH))
@@ -352,8 +352,8 @@ export class WaterfallRenderer {
     }
 
     const level = valueBuffer[ry * ringW + rx]
-    const ts    = timeBuffer[ry]
-    const ago   = ts > 0 ? ((Date.now() - ts) / 1000).toFixed(1) + 's ago' : '—'
+    const ts      = timeBuffer[ry]
+    const timeStr = ts > 0 ? new Date(ts).toISOString().slice(11, 23) + ' UTC' : '—'
 
     let freqLine = ''
     if (band) {
@@ -363,7 +363,7 @@ export class WaterfallRenderer {
       freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
     }
 
-    el.textContent = `${freqLine}time:  ${ago}\nvalue: ${this.valueFormat(level)}`
+    el.textContent = `${freqLine}time:  ${timeStr}\nvalue: ${this.valueFormat(level)}`
     el.style.display = 'block'
 
     // Position near cursor, nudge away from edges
