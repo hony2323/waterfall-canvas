@@ -1,2 +1,3 @@
-export { default as WaterfallCanvas } from './WaterfallCanvas'
-export type { WaterfallCanvasProps, ParsedFrame, BandHeader } from './WaterfallCanvas'
+export { WaterfallRenderer } from './WaterfallRenderer'
+export type { WaterfallOptions } from './WaterfallRenderer'
+export type { ParsedFrame, BandHeader } from './types'

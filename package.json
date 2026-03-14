@@ -3,9 +3,22 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./react": "./src/WaterfallCanvas.tsx"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "~5.9.3"
   }
 }
