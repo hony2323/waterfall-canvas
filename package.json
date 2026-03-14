@@ -1,0 +1,11 @@
+{
+  "name": "waterfall-canvas",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  }
+}
