@@ -9,21 +9,23 @@ export interface WaterfallCanvasProps {
   rowHeight?: number
   colorMap?: (t: number) => [number, number, number]
   tooltip?: boolean
+  freqFormat?: (hz: number) => string
+  valueFormat?: (t: number) => string
   onMetrics?: (pushMs: number, renderMs: number) => void
 }
 
-export function WaterfallCanvas({ frame, rowCount = 400, heightPx = 400, rowHeight = 1, colorMap, tooltip, onMetrics }: WaterfallCanvasProps) {
+export function WaterfallCanvas({ frame, rowCount = 400, heightPx = 400, rowHeight = 1, colorMap, tooltip, freqFormat, valueFormat, onMetrics }: WaterfallCanvasProps) {
   const canvasRef     = useRef<HTMLCanvasElement>(null)
   const rendererRef   = useRef<WaterfallRenderer | null>(null)
   const onMetricsRef  = useRef(onMetrics)
   onMetricsRef.current = onMetrics
 
   useEffect(() => {
-    const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, colorMap, tooltip })
+    const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, colorMap, tooltip, freqFormat, valueFormat })
     renderer.onMetrics = (...args) => onMetricsRef.current?.(...args)
     rendererRef.current = renderer
     return () => { renderer.destroy(); rendererRef.current = null }
-  }, [rowCount, colorMap, tooltip])
+  }, [rowCount, colorMap, tooltip, freqFormat, valueFormat])
 
   useEffect(() => {
     if (rendererRef.current) rendererRef.current.rowHeight = rowHeight

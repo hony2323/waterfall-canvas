@@ -17,11 +17,21 @@ export interface WaterfallOptions {
    */
   bufferWidth?: number
   /**
-   * Show a hover tooltip with band, frequency, time, and signal level.
+   * Show a hover tooltip with band, frequency, time, and signal value.
    * Allocates an additional Float32Array (ringWidth × rowCount) for value storage.
    * Default: false.
    */
   tooltip?: boolean
+  /**
+   * Format the frequency shown in the tooltip. Receives the raw Hz value.
+   * Default: hz => hz.toFixed(1)
+   */
+  freqFormat?: (hz: number) => string
+  /**
+   * Format the signal value shown in the tooltip. Receives normalized t ∈ [0, 1].
+   * Default: t => (t * 100).toFixed(1) + '%'
+   */
+  valueFormat?: (t: number) => string
 }
 
 interface BandRange {
@@ -41,6 +51,8 @@ export class WaterfallRenderer {
   private readonly bufferWidth: number
   private readonly lut: Uint8Array
   private readonly tooltipEnabled: boolean
+  private readonly freqFormat: (hz: number) => string
+  private readonly valueFormat: (t: number) => string
 
   private imgData: ImageData | null = null
   private viewImg: ImageData | null = null
@@ -79,6 +91,8 @@ export class WaterfallRenderer {
     this.bufferWidth    = options.bufferWidth ?? 4096
     this.lut            = buildLut(options.colorMap ?? interpolateGrayscale)
     this.tooltipEnabled = options.tooltip     ?? false
+    this.freqFormat     = options.freqFormat  ?? (hz => hz.toFixed(1))
+    this.valueFormat    = options.valueFormat ?? (t  => (t * 100).toFixed(1) + '%')
 
     if (this.tooltipEnabled) {
       const el = document.createElement('div')
@@ -346,10 +360,10 @@ export class WaterfallRenderer {
       const offsetInBand = continuousSrcX - band.start
       const bandSamples  = band.end - band.start
       const freq = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
-      freqLine = `${band.id}  (${band.freqStart} – ${band.freqEnd})\nfreq:  ${freq.toFixed(1)}\n`
+      freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
     }
 
-    el.textContent = `${freqLine}time:  ${ago}\nlevel: ${(level * 100).toFixed(1)}%`
+    el.textContent = `${freqLine}time:  ${ago}\nvalue: ${this.valueFormat(level)}`
     el.style.display = 'block'
 
     // Position near cursor, nudge away from edges
