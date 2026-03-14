@@ -1,9 +1,15 @@
-import { COLORMAP_LUT, valueToLutIndex } from './colormap'
+import { buildLut, interpolateGrayscale, normalizeValue } from './colormap'
 import type { BandHeader, ParsedFrame } from './types'
 
 export interface WaterfallOptions {
   /** Number of history rows in the ring buffer (also sets canvas pixel height). Default: 400 */
   rowCount?: number
+  /**
+   * Colormap function: receives a normalized value t ∈ [0, 1] and returns [r, g, b] (0–255).
+   * Defaults to the hot colormap (black → red → yellow → white).
+   * A 256-entry LUT is pre-computed from this function at construction time.
+   */
+  colorMap?: (t: number) => [number, number, number]
 }
 
 export class WaterfallRenderer {
@@ -12,6 +18,7 @@ export class WaterfallRenderer {
 
   private readonly canvas: HTMLCanvasElement
   private readonly rowCount: number
+  private readonly lut: Uint8Array               // 256-entry packed RGB LUT
 
   private imgData: ImageData | null = null       // full-width ring buffer (RAM, no size limit)
   private viewImg: ImageData | null = null       // canvas-width output buffer
@@ -38,8 +45,9 @@ export class WaterfallRenderer {
   private readonly _boundMouseUp: (e: MouseEvent) => void
 
   constructor(canvas: HTMLCanvasElement, options: WaterfallOptions = {}) {
-    this.canvas = canvas
+    this.canvas   = canvas
     this.rowCount = options.rowCount ?? 400
+    this.lut      = buildLut(options.colorMap ?? interpolateGrayscale)
 
     this._boundLoop      = this._loop.bind(this)
     this._boundWheel     = this._onWheel.bind(this)
@@ -136,11 +144,12 @@ export class WaterfallRenderer {
       if (!samples) continue
       const precision = band.precision
       const count     = samples.length
+      const lut       = this.lut
       for (let i = 0; i < count; i++) {
-        const idx = valueToLutIndex(samples[i], precision)
-        buf[px++] = COLORMAP_LUT[idx * 3]
-        buf[px++] = COLORMAP_LUT[idx * 3 + 1]
-        buf[px++] = COLORMAP_LUT[idx * 3 + 2]
+        const idx = Math.min(255, Math.max(0, Math.round(normalizeValue(samples[i], precision) * 255)))
+        buf[px++] = lut[idx * 3]
+        buf[px++] = lut[idx * 3 + 1]
+        buf[px++] = lut[idx * 3 + 2]
         buf[px++] = 255
       }
     }

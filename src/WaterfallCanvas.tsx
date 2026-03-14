@@ -6,21 +6,22 @@ export interface WaterfallCanvasProps {
   frame: ParsedFrame | null
   rowCount?: number
   heightPx?: number
+  colorMap?: (t: number) => [number, number, number]
   onMetrics?: (pushMs: number, renderMs: number) => void
 }
 
-export function WaterfallCanvas({ frame, rowCount = 400, heightPx = 400, onMetrics }: WaterfallCanvasProps) {
+export function WaterfallCanvas({ frame, rowCount = 400, heightPx = 400, colorMap, onMetrics }: WaterfallCanvasProps) {
   const canvasRef     = useRef<HTMLCanvasElement>(null)
   const rendererRef   = useRef<WaterfallRenderer | null>(null)
   const onMetricsRef  = useRef(onMetrics)
   onMetricsRef.current = onMetrics
 
   useEffect(() => {
-    const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount })
+    const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, colorMap })
     renderer.onMetrics = (...args) => onMetricsRef.current?.(...args)
     rendererRef.current = renderer
     return () => { renderer.destroy(); rendererRef.current = null }
-  }, [rowCount])
+  }, [rowCount, colorMap])
 
   useEffect(() => {
     if (!frame) return
