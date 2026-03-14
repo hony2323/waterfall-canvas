@@ -1,9 +1,12 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { WaterfallRenderer } from './WaterfallRenderer'
 import type { ParsedFrame } from './types'
 
+export interface WaterfallCanvasHandle {
+  push(frame: ParsedFrame): void
+}
+
 export interface WaterfallCanvasProps {
-  frame: ParsedFrame | null
   rowCount?: number
   heightPx?: number
   rowHeight?: number
@@ -14,32 +17,33 @@ export interface WaterfallCanvasProps {
   onMetrics?: (pushMs: number, renderMs: number) => void
 }
 
-export function WaterfallCanvas({ frame, rowCount = 400, heightPx = 400, rowHeight = 1, colorMap, tooltip, freqFormat, valueFormat, onMetrics }: WaterfallCanvasProps) {
-  const canvasRef     = useRef<HTMLCanvasElement>(null)
-  const rendererRef   = useRef<WaterfallRenderer | null>(null)
-  const onMetricsRef  = useRef(onMetrics)
-  onMetricsRef.current = onMetrics
+export const WaterfallCanvas = forwardRef<WaterfallCanvasHandle, WaterfallCanvasProps>(
+  function WaterfallCanvas({ rowCount = 400, heightPx = 400, rowHeight = 1, colorMap, tooltip, freqFormat, valueFormat, onMetrics }, ref) {
+    const canvasRef    = useRef<HTMLCanvasElement>(null)
+    const rendererRef  = useRef<WaterfallRenderer | null>(null)
+    const onMetricsRef = useRef(onMetrics)
+    onMetricsRef.current = onMetrics
 
-  useEffect(() => {
-    const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, colorMap, tooltip, freqFormat, valueFormat })
-    renderer.onMetrics = (...args) => onMetricsRef.current?.(...args)
-    rendererRef.current = renderer
-    return () => { renderer.destroy(); rendererRef.current = null }
-  }, [rowCount, colorMap, tooltip, freqFormat, valueFormat])
+    useImperativeHandle(ref, () => ({
+      push: (frame) => rendererRef.current?.push(frame),
+    }), [])
 
-  useEffect(() => {
-    if (rendererRef.current) rendererRef.current.rowHeight = rowHeight
-  }, [rowHeight])
+    useEffect(() => {
+      const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, colorMap, tooltip, freqFormat, valueFormat })
+      renderer.onMetrics = (...args) => onMetricsRef.current?.(...args)
+      rendererRef.current = renderer
+      return () => { renderer.destroy(); rendererRef.current = null }
+    }, [rowCount, colorMap, tooltip, freqFormat, valueFormat])
 
-  useEffect(() => {
-    if (!frame) return
-    rendererRef.current?.push(frame)
-  }, [frame])
+    useEffect(() => {
+      if (rendererRef.current) rendererRef.current.rowHeight = rowHeight
+    }, [rowHeight])
 
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: '100%', height: `${heightPx}px`, display: 'block' }}
-    />
-  )
-}
+    return (
+      <canvas
+        ref={canvasRef}
+        style={{ width: '100%', height: `${heightPx}px`, display: 'block' }}
+      />
+    )
+  }
+)
