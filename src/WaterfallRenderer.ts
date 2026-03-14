@@ -6,10 +6,16 @@ export interface WaterfallOptions {
   rowCount?: number
   /**
    * Colormap function: receives a normalized value t ∈ [0, 1] and returns [r, g, b] (0–255).
-   * Defaults to the hot colormap (black → red → yellow → white).
-   * A 256-entry LUT is pre-computed from this function at construction time.
+   * Defaults to grayscale. A 256-entry LUT is pre-computed at construction time.
    */
   colorMap?: (t: number) => [number, number, number]
+  /**
+   * Max width of the ring buffer in pixels. Input is downsampled to this width when
+   * totalSamples exceeds it, keeping memory bounded.
+   * Memory cost: bufferWidth × rowCount × 4 bytes.
+   * Default: 4096 (~6 MB at rowCount=400). Set to 0 to use full input resolution.
+   */
+  bufferWidth?: number
 }
 
 export class WaterfallRenderer {
@@ -20,17 +26,20 @@ export class WaterfallRenderer {
 
   private readonly canvas: HTMLCanvasElement
   private readonly rowCount: number
-  private readonly lut: Uint8Array               // 256-entry packed RGB LUT
+  private readonly bufferWidth: number
+  private readonly lut: Uint8Array
 
-  private imgData: ImageData | null = null       // full-width ring buffer (RAM, no size limit)
-  private viewImg: ImageData | null = null       // canvas-width output buffer
+  private imgData: ImageData | null = null
+  private viewImg: ImageData | null = null
   private ctx: CanvasRenderingContext2D | null = null
 
   private dirty = false
   private viewDirty = true
   private viewStart = 0
   private viewEnd = 0
-  private totalSamples = 0
+  private ringWidth = 0       // actual ring buffer width (≤ totalSamples)
+  private totalSamples = 0    // raw input sample count (used for downsampling math)
+  private bandRanges: { start: number; end: number; id: string; precision: string }[] = []
   private initialized = false
   private rafId = 0
   private pendingPushMs = -1
@@ -46,9 +55,10 @@ export class WaterfallRenderer {
   private readonly _boundMouseUp: (e: MouseEvent) => void
 
   constructor(canvas: HTMLCanvasElement, options: WaterfallOptions = {}) {
-    this.canvas   = canvas
-    this.rowCount = options.rowCount ?? 400
-    this.lut      = buildLut(options.colorMap ?? interpolateGrayscale)
+    this.canvas      = canvas
+    this.rowCount    = options.rowCount    ?? 400
+    this.bufferWidth = options.bufferWidth ?? 4096
+    this.lut         = buildLut(options.colorMap ?? interpolateGrayscale)
 
     this._boundLoop      = this._loop.bind(this)
     this._boundWheel     = this._onWheel.bind(this)
@@ -75,7 +85,6 @@ export class WaterfallRenderer {
     this.rafId = requestAnimationFrame(this._boundLoop)
   }
 
-  /** Push a new frame — adds a row to the top of the waterfall. */
   push(frame: ParsedFrame): void {
     if (!this.initialized) this._init(frame)
     const t0 = performance.now()
@@ -83,7 +92,6 @@ export class WaterfallRenderer {
     this.pendingPushMs = performance.now() - t0
   }
 
-  /** Tear down: cancel rAF, remove all event listeners, free buffers. */
   destroy(): void {
     cancelAnimationFrame(this.rafId)
     this.ro.disconnect()
@@ -92,10 +100,10 @@ export class WaterfallRenderer {
     this.canvas.removeEventListener('mousemove',  this._boundMouseMove)
     this.canvas.removeEventListener('mouseup',    this._boundMouseUp)
     this.canvas.removeEventListener('mouseleave', this._boundMouseUp)
-    this.imgData      = null
-    this.viewImg      = null
-    this.ctx          = null
-    this.initialized  = false
+    this.imgData     = null
+    this.viewImg     = null
+    this.ctx         = null
+    this.initialized = false
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -108,53 +116,78 @@ export class WaterfallRenderer {
 
   private _init(f: ParsedFrame): void {
     let total = 0
-    for (const band of f.header) total += this._bandSampleCount(band)
+    this.bandRanges = []
+    for (const band of f.header) {
+      const count = this._bandSampleCount(band)
+      this.bandRanges.push({ start: total, end: total + count, id: band.band_id, precision: band.precision })
+      total += count
+    }
     this.totalSamples = total
+    this.ringWidth    = this.bufferWidth > 0 ? Math.min(total, this.bufferWidth) : total
 
-    const img = new ImageData(total, this.rowCount)
-    new Uint32Array(img.data.buffer).fill(0xFF000000)  // opaque black
+    const img = new ImageData(this.ringWidth, this.rowCount)
+    new Uint32Array(img.data.buffer).fill(0xFF000000)
     this.imgData = img
 
     this.viewImg = new ImageData(this.canvas.width || 800, this.rowCount)
     this.ctx     = this.canvas.getContext('2d')!
 
     this.viewStart   = 0
-    this.viewEnd     = total
+    this.viewEnd     = this.ringWidth
     this.initialized = true
     this.dirty       = true
     this.viewDirty   = true
   }
 
   private _pushRow(f: ParsedFrame): void {
-    const img  = this.imgData
+    const img   = this.imgData
     if (!img) return
+    const ringW = this.ringWidth
     const total = this.totalSamples
     const rowH  = Math.max(1, this.rowHeight | 0)
     const buf   = img.data
+    const lut   = this.lut
 
-    buf.copyWithin(total * 4 * rowH, 0, total * (this.rowCount - rowH) * 4)
+    buf.copyWithin(ringW * 4 * rowH, 0, ringW * (this.rowCount - rowH) * 4)
 
-    // Write one row at offset 0
     let px = 0
-    for (const band of f.header) {
-      const samples   = f.bands[band.band_id]
-      if (!samples) continue
-      const precision = band.precision
-      const count     = samples.length
-      const lut       = this.lut
-      for (let i = 0; i < count; i++) {
-        const idx = Math.min(255, Math.max(0, Math.round(normalizeValue(samples[i], precision) * 255)))
+    if (ringW === total) {
+      // Fast path: 1:1, no downsampling
+      for (const band of f.header) {
+        const samples   = f.bands[band.band_id]
+        if (!samples) continue
+        const precision = band.precision
+        for (let i = 0; i < samples.length; i++) {
+          const idx = Math.min(255, Math.max(0, Math.round(normalizeValue(samples[i], precision) * 255)))
+          buf[px++] = lut[idx * 3]
+          buf[px++] = lut[idx * 3 + 1]
+          buf[px++] = lut[idx * 3 + 2]
+          buf[px++] = 255
+        }
+      }
+    } else {
+      // Downsampled path: nearest-neighbour from input → ring buffer
+      for (let x = 0; x < ringW; x++) {
+        const srcX = (x * total / ringW) | 0
+        let sampleVal = 0, precision = 'uint8'
+        for (const range of this.bandRanges) {
+          if (srcX < range.end) {
+            sampleVal = f.bands[range.id]![srcX - range.start]
+            precision  = range.precision
+            break
+          }
+        }
+        const idx = Math.min(255, Math.max(0, Math.round(normalizeValue(sampleVal, precision) * 255)))
         buf[px++] = lut[idx * 3]
         buf[px++] = lut[idx * 3 + 1]
         buf[px++] = lut[idx * 3 + 2]
         buf[px++] = 255
       }
     }
-    // Duplicate row 0 for the remaining rowHeight-1 rows
-    for (let row = 1; row < rowH; row++) {
-      buf.copyWithin(row * total * 4, 0, total * 4)
-    }
 
+    for (let row = 1; row < rowH; row++) {
+      buf.copyWithin(row * ringW * 4, 0, ringW * 4)
+    }
     this.dirty = true
   }
 
@@ -163,7 +196,7 @@ export class WaterfallRenderer {
     const vData = this.viewImg
     if (!src || !vData) return
 
-    const total = this.totalSamples
+    const ringW = this.ringWidth
     const vs    = this.viewStart | 0
     const span  = (this.viewEnd | 0) - vs
     if (span <= 0) return
@@ -173,7 +206,7 @@ export class WaterfallRenderer {
     const h   = this.rowCount
 
     for (let y = 0; y < h; y++) {
-      const srcRow = y * total
+      const srcRow = y * ringW
       const dstRow = y * w
       for (let x = 0; x < w; x++) {
         const srcX = vs + ((x * span / w) | 0)
@@ -215,22 +248,22 @@ export class WaterfallRenderer {
 
   private _onWheel(e: WheelEvent): void {
     e.preventDefault()
-    const total = this.totalSamples
-    if (!total) return
+    const ringW = this.ringWidth
+    if (!ringW) return
 
     const span         = this.viewEnd - this.viewStart
     const factor       = e.deltaY > 0 ? 1.15 : 0.85
-    const newSpan      = Math.max(256, Math.min(total, span * factor))
+    const newSpan      = Math.max(32, Math.min(ringW, span * factor))
     const cursorFrac   = e.offsetX / this.canvas.clientWidth
     const cursorSample = this.viewStart + cursorFrac * span
 
     let newStart = cursorSample - cursorFrac * newSpan
     let newEnd   = newStart + newSpan
-    if (newStart < 0)     { newStart = 0;     newEnd   = newSpan }
-    if (newEnd   > total) { newEnd   = total; newStart = total - newSpan }
+    if (newStart < 0)      { newStart = 0;      newEnd   = newSpan }
+    if (newEnd   > ringW)  { newEnd   = ringW;  newStart = ringW - newSpan }
 
     this.viewStart = Math.max(0, newStart)
-    this.viewEnd   = Math.min(total, newEnd)
+    this.viewEnd   = Math.min(ringW, newEnd)
     this.viewDirty = true
   }
 
@@ -242,8 +275,8 @@ export class WaterfallRenderer {
 
   private _onMouseMove(e: MouseEvent): void {
     if (!this.dragActive) return
-    const total = this.totalSamples
-    if (!total) return
+    const ringW = this.ringWidth
+    if (!ringW) return
 
     const span = this.viewEnd - this.viewStart
     const dx   = ((e.clientX - this.lastDragX) / this.canvas.clientWidth) * span
@@ -251,11 +284,11 @@ export class WaterfallRenderer {
 
     let newStart = this.viewStart - dx
     let newEnd   = this.viewEnd   - dx
-    if (newStart < 0)     { newEnd -= newStart;          newStart = 0 }
-    if (newEnd   > total) { newStart -= (newEnd - total); newEnd   = total }
+    if (newStart < 0)     { newEnd -= newStart;           newStart = 0 }
+    if (newEnd   > ringW) { newStart -= (newEnd - ringW); newEnd   = ringW }
 
     this.viewStart = Math.max(0, newStart)
-    this.viewEnd   = Math.min(total, newEnd)
+    this.viewEnd   = Math.min(ringW, newEnd)
     this.viewDirty = true
   }
 
