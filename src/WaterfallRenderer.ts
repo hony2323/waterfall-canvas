@@ -211,7 +211,7 @@ export class WaterfallRenderer {
 
     if (this.timeBuffer) {
       this.timeBuffer.copyWithin(rowH, 0, this.rowCount - rowH)
-      const ts = f.header[0] ? new Date(f.header[0].timestamp).getTime() : Date.now()
+      const ts = f.header[0]?.sent_at ?? Date.now()
       this.timeBuffer.fill(ts, 0, rowH)
     }
     if (this.valueBuffer) {
@@ -340,28 +340,24 @@ export class WaterfallRenderer {
     const rx = Math.min(ringW - 1, Math.max(0, ringX | 0))   // quantised — for valueBuffer lookup
     const ry = Math.min(this.rowCount - 1, Math.max(0, rowIdx | 0))
 
-    // Continuous ring → input sample position (no per-ring-pixel quantisation)
-    const continuousSrcX = ringW === this.totalSamples
-      ? ringX
-      : ringX * (this.totalSamples / ringW)
+    // Map ring position → input sample index, snapped to the nearest whole sample
+    const rawSrcX  = ringW === this.totalSamples ? ringX : ringX * (this.totalSamples / ringW)
+    const srcIndex = Math.max(0, Math.min(this.totalSamples - 1, Math.round(rawSrcX)))
 
-    // Find band using continuous position
-    let band: BandRange | null = null
+    // Find band; fall back to last band at right edge
+    let band: BandRange = this.bandRanges[this.bandRanges.length - 1]
     for (const range of this.bandRanges) {
-      if (continuousSrcX < range.end) { band = range; break }
+      if (srcIndex < range.end) { band = range; break }
     }
 
     const level = valueBuffer[ry * ringW + rx]
     const ts      = timeBuffer[ry]
     const timeStr = ts > 0 ? new Date(ts).toISOString().slice(11, 23) + ' UTC' : '—'
 
-    let freqLine = ''
-    if (band) {
-      const offsetInBand = continuousSrcX - band.start
-      const bandSamples  = band.end - band.start
-      const freq = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
-      freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
-    }
+    const offsetInBand = Math.min(band.end - band.start - 1, srcIndex - band.start)
+    const bandSamples  = band.end - band.start
+    const freq = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
+    const freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
 
     el.textContent = `${freqLine}time:  ${timeStr}\nvalue: ${this.valueFormat(level)}`
     el.style.display = 'block'
