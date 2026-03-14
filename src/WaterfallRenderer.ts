@@ -15,6 +15,8 @@ export interface WaterfallOptions {
 export class WaterfallRenderer {
   /** Called from the rAF loop after each render. Assign freely — no re-render side effects. */
   onMetrics?: (pushMs: number, renderMs: number) => void
+  /** Pixel height of each time-slice row. Higher = faster-looking waterfall. Default: 1 */
+  rowHeight = 1
 
   private readonly canvas: HTMLCanvasElement
   private readonly rowCount: number
@@ -32,7 +34,6 @@ export class WaterfallRenderer {
   private initialized = false
   private rafId = 0
   private pendingPushMs = -1
-  private bandBoundaries: number[] = []
 
   private dragActive = false
   private lastDragX = 0
@@ -107,14 +108,8 @@ export class WaterfallRenderer {
 
   private _init(f: ParsedFrame): void {
     let total = 0
-    const boundaries: number[] = []
-    for (const band of f.header) {
-      total += this._bandSampleCount(band)
-      boundaries.push(total)
-    }
-    boundaries.pop()
-    this.totalSamples    = total
-    this.bandBoundaries  = boundaries
+    for (const band of f.header) total += this._bandSampleCount(band)
+    this.totalSamples = total
 
     const img = new ImageData(total, this.rowCount)
     new Uint32Array(img.data.buffer).fill(0xFF000000)  // opaque black
@@ -131,13 +126,15 @@ export class WaterfallRenderer {
   }
 
   private _pushRow(f: ParsedFrame): void {
-    const img = this.imgData
+    const img  = this.imgData
     if (!img) return
     const total = this.totalSamples
+    const rowH  = Math.max(1, this.rowHeight | 0)
     const buf   = img.data
 
-    buf.copyWithin(total * 4, 0, total * (this.rowCount - 1) * 4)
+    buf.copyWithin(total * 4 * rowH, 0, total * (this.rowCount - rowH) * 4)
 
+    // Write one row at offset 0
     let px = 0
     for (const band of f.header) {
       const samples   = f.bands[band.band_id]
@@ -153,6 +150,11 @@ export class WaterfallRenderer {
         buf[px++] = 255
       }
     }
+    // Duplicate row 0 for the remaining rowHeight-1 rows
+    for (let row = 1; row < rowH; row++) {
+      buf.copyWithin(row * total * 4, 0, total * 4)
+    }
+
     this.dirty = true
   }
 
@@ -202,24 +204,6 @@ export class WaterfallRenderer {
       if (this.pendingPushMs >= 0) {
         this.onMetrics?.(this.pendingPushMs, renderMs)
         this.pendingPushMs = -1
-      }
-
-      // Band boundary lines
-      const vs   = this.viewStart
-      const ve   = this.viewEnd
-      const span = ve - vs
-      if (this.bandBoundaries.length > 0) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.4)'
-        ctx.lineWidth   = 1
-        for (const b of this.bandBoundaries) {
-          if (b > vs && b < ve) {
-            const x = ((b - vs) / span) * canvas.width
-            ctx.beginPath()
-            ctx.moveTo(x, 0)
-            ctx.lineTo(x, canvas.height)
-            ctx.stroke()
-          }
-        }
       }
 
       this.dirty     = false
