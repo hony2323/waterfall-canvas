@@ -328,33 +328,38 @@ export class WaterfallRenderer {
     const timeBuffer  = this.timeBuffer
     if (!el || !valueBuffer || !timeBuffer || !this.initialized) return
 
-    const ringW   = this.ringWidth
-    const span    = this.viewEnd - this.viewStart
-    const offsetX = e.offsetX
-    const offsetY = e.offsetY
+    const ringW  = this.ringWidth
+    // Mirror _renderViewport: use integer-truncated view bounds
+    const vs     = this.viewStart | 0
+    const span   = (this.viewEnd | 0) - vs
 
-    // Canvas → ring buffer coordinates
-    const canvasFrac = offsetX / this.canvas.clientWidth
-    const ringX      = this.viewStart + canvasFrac * span
-    const rowIdx     = (offsetY / this.canvas.clientHeight) * this.rowCount
-    const rx = Math.min(ringW - 1, Math.max(0, ringX | 0))   // quantised — for valueBuffer lookup
-    const ry = Math.min(this.rowCount - 1, Math.max(0, rowIdx | 0))
+    const rect       = this.canvas.getBoundingClientRect()
+    const canvasFrac = (e.clientX - rect.left) / rect.width
+    const rowFrac    = (e.clientY - rect.top)  / rect.height
 
-    // Map ring position → input sample index, snapped to the nearest whole sample
-    const rawSrcX  = ringW === this.totalSamples ? ringX : ringX * (this.totalSamples / ringW)
-    const srcIndex = Math.max(0, Math.min(this.totalSamples - 1, Math.round(rawSrcX)))
+    // Integer ring pixel — for value buffer lookup (matches what _renderViewport drew)
+    const rx = Math.min(ringW - 1, Math.max(0, vs + ((canvasFrac * span) | 0)))
+    const ry = Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
 
-    // Find band; fall back to last band at right edge
+    // Continuous ring position → input sample, snapped to nearest sample
+    // so freq is always an exact multiple of the band step
+    const ringXf = vs + canvasFrac * span
+    const srcXf  = ringW === this.totalSamples
+      ? ringXf
+      : ringXf * (this.totalSamples / ringW)
+    const srcXc  = Math.max(0, Math.min(this.totalSamples - 1, Math.round(srcXf)))
+
+    // Find band using continuous position; fall back to last band at right edge
     let band: BandRange = this.bandRanges[this.bandRanges.length - 1]
     for (const range of this.bandRanges) {
-      if (srcIndex < range.end) { band = range; break }
+      if (srcXc < range.end) { band = range; break }
     }
 
     const level = valueBuffer[ry * ringW + rx]
     const ts      = timeBuffer[ry]
     const timeStr = ts > 0 ? new Date(ts).toISOString().slice(11, 23) + ' UTC' : '—'
 
-    const offsetInBand = Math.min(band.end - band.start - 1, srcIndex - band.start)
+    const offsetInBand = Math.max(0, srcXc - band.start)
     const bandSamples  = band.end - band.start
     const freq = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
     const freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
