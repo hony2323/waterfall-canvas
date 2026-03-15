@@ -1,25 +1,39 @@
 {
   "name": "waterfall-canvas",
   "version": "0.1.0",
+  "description": "High-performance waterfall/spectrogram canvas renderer with React wrapper",
+  "keywords": ["waterfall", "spectrogram", "canvas", "sdr", "signal", "react"],
+  "license": "MIT",
   "type": "module",
+  "files": ["dist"],
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./react": "./src/WaterfallCanvas.tsx"
+    ".": {
+      "import":  { "types": "./dist/index.d.ts",  "default": "./dist/index.js"  },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    },
+    "./react": {
+      "import":  { "types": "./dist/react.d.ts",  "default": "./dist/react.js"  },
+      "require": { "types": "./dist/react.d.cts", "default": "./dist/react.cjs" }
+    }
   },
+  "main":   "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types":  "./dist/index.d.ts",
   "scripts": {
-    "build": "tsup",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "build":          "tsup",
+    "watch":          "tsup --watch",
+    "typecheck":      "tsc --noEmit",
+    "test":           "vitest run",
+    "test:watch":     "vitest",
+    "test:coverage":  "vitest run --coverage",
+    "prepublishOnly": "npm run build && npm test"
   },
   "peerDependencies": {
     "react": ">=18.0.0"
   },
   "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
+    "react": { "optional": true }
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
