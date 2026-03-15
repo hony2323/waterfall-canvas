@@ -204,25 +204,11 @@ const myLut = buildLut(t => [Math.round(t * 255), 0, Math.round((1 - t) * 255)])
 
 ---
 
-## Development
+## Contributing
 
-```bash
-npm run build        # compile to dist/
-npm run watch        # rebuild on file changes
-npm test             # run tests once
-npm run test:watch   # run tests in watch mode
-npm run test:coverage
-npm run typecheck
-```
+1. Fork the repo and create a branch from `dev`
+2. Make your changes and add tests where relevant
+3. Open a pull request against `dev` — CI must pass before review
+4. A maintainer will merge to `dev`, then promote to `master` for release
 
----
-
-## Publishing
-
-```bash
-# bump version in package.json, then:
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The `publish` GitHub Actions workflow triggers on `v*` tags, runs `prepublishOnly` (build + tests), and publishes to npm with provenance. Requires an `NPM_TOKEN` secret in the repository settings.
+Please open an issue first for significant changes so the approach can be discussed before you invest time in an implementation.
