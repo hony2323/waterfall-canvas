@@ -1,5 +1,5 @@
 {
-  "name": "waterfall-canvas",
+  "name": "@hony2323/waterfall-canvas",
   "version": "0.1.0",
   "description": "High-performance waterfall/spectrogram canvas renderer with React wrapper",
   "keywords": ["waterfall", "spectrogram", "canvas", "sdr", "signal", "react"],

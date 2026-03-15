@@ -16,18 +16,18 @@ High-performance waterfall / spectrogram canvas renderer with an optional React 
 ## Install
 
 ```bash
-npm install waterfall-canvas
+npm install @hony2323/waterfall-canvas
 ```
 
-React is a peer dependency and is only needed if you use `waterfall-canvas/react`.
+React is a peer dependency and is only needed if you use `@hony2323/waterfall-canvas/react`.
 
 ---
 
 ## Quick start — vanilla
 
 ```ts
-import { WaterfallRenderer, interpolateTurbo } from 'waterfall-canvas'
-import type { ParsedFrame } from 'waterfall-canvas'
+import { WaterfallRenderer, interpolateTurbo } from '@hony2323/waterfall-canvas'
+import type { ParsedFrame } from '@hony2323/waterfall-canvas'
 
 const canvas = document.getElementById('waterfall') as HTMLCanvasElement
 
@@ -55,9 +55,9 @@ renderer.destroy()
 
 ```tsx
 import { useRef } from 'react'
-import { WaterfallCanvas } from 'waterfall-canvas/react'
-import { interpolateTurbo } from 'waterfall-canvas'
-import type { WaterfallCanvasHandle } from 'waterfall-canvas/react'
+import { WaterfallCanvas } from '@hony2323/waterfall-canvas/react'
+import { interpolateTurbo } from '@hony2323/waterfall-canvas'
+import type { WaterfallCanvasHandle } from '@hony2323/waterfall-canvas/react'
 
 const freqFormat = (hz: number) => (hz / 1e6).toFixed(4) + ' MHz'
 const valueFormat = (t: number)  => (t * 100).toFixed(1)  + ' dBFS'
@@ -193,7 +193,7 @@ All `WaterfallOptions` fields are available as props, plus:
 ## Colormaps
 
 ```ts
-import { interpolateGrayscale, interpolateHot, interpolateTurbo, buildLut } from 'waterfall-canvas'
+import { interpolateGrayscale, interpolateHot, interpolateTurbo, buildLut } from '@hony2323/waterfall-canvas'
 
 // Use a built-in
 new WaterfallRenderer(canvas, { colorMap: interpolateTurbo })

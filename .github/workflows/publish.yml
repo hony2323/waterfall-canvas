@@ -35,6 +35,6 @@ jobs:
           (echo "❌ Tag must be on main/master branch" && exit 1)
 
       # prepublishOnly runs build + tests automatically
-      - run: npm publish --provenance --access public
+      - run: npm publish --provenance --access public  # --access public required for scoped packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
