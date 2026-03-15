@@ -5,7 +5,7 @@
   "keywords": ["waterfall", "spectrogram", "canvas", "sdr", "signal", "react"],
   "license": "MIT",
   "type": "module",
-  "files": ["dist"],
+  "files": ["dist", "LICENSE"],
   "sideEffects": false,
   "exports": {
     ".": {
