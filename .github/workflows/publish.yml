@@ -26,6 +26,14 @@ jobs:
 
       - run: npm ci
 
+      # Guard: only publish if the tag sits on the main/master branch
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main || git fetch origin master
+          git merge-base --is-ancestor HEAD origin/main 2>/dev/null || \
+          git merge-base --is-ancestor HEAD origin/master 2>/dev/null || \
+          (echo "❌ Tag must be on main/master branch" && exit 1)
+
       # prepublishOnly runs build + tests automatically
       - run: npm publish --provenance --access public
         env:
