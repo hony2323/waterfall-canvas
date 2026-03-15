@@ -289,8 +289,18 @@ export class WaterfallRenderer {
     for (let y = 0; y < h; y++) {
       const srcRow = y * ringW
       const dstRow = y * w
+      const vRow   = this.valueBuffer ? y * ringW : -1
       for (let x = 0; x < w; x++) {
-        const srcX = vs + (((x + 0.5) * span / w) | 0)
+        const x0 = vs + ((x       * span / w) | 0)
+        const x1 = Math.min(ringW, vs + (((x + 1) * span / w) | 0))
+        let srcX = vs + (((x + 0.5) * span / w) | 0)
+        if (vRow >= 0 && x1 > x0 + 1) {
+          let bestVal = -1
+          for (let sx = x0; sx < x1; sx++) {
+            const v = this.valueBuffer![vRow + sx]
+            if (v > bestVal) { bestVal = v; srcX = sx }
+          }
+        }
         const si = (srcRow + srcX) * 4
         const di = (dstRow + x) * 4
         dst[di]   = src[si]
