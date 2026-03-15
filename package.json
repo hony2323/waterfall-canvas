@@ -27,7 +27,7 @@
     "test":           "vitest run",
     "test:watch":     "vitest",
     "test:coverage":  "vitest run --coverage",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
   },
   "peerDependencies": {
     "react": ">=18.0.0"
