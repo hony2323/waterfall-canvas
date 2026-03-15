@@ -37,6 +37,17 @@ export interface WaterfallOptions {
    * Default: t => (t * 100).toFixed(1) + '%'
    */
   valueFormat?: (t: number) => string
+  /**
+   * Show a time axis on the left edge of the canvas with HH:MM:SS labels.
+   * Reads from the same timeBuffer as the tooltip (allocated when either is true).
+   * Default: false.
+   */
+  timeBar?: boolean
+  /**
+   * When true, the time-ago labels in the time bar update live every rAF tick.
+   * When false (default), labels only update when new data arrives — no jumping.
+   */
+  timeBarDynamic?: boolean
 }
 
 interface BandRange {
@@ -56,9 +67,13 @@ export class WaterfallRenderer {
   private readonly bufferWidth: number
   private readonly lut: Uint8Array
   private readonly tooltipEnabled: boolean
+  private readonly timeBarEnabled: boolean
+  private readonly timeBarDynamic: boolean
   private readonly minSpan: number
   private readonly freqFormat: (hz: number) => string
   private readonly valueFormat: (t: number) => string
+
+  private timeBarNow = 0  // snapshot of Date.now() taken at each push
 
   private imgData: ImageData | null = null
   private viewImg: ImageData | null = null
@@ -97,7 +112,9 @@ export class WaterfallRenderer {
     this.bufferWidth    = options.bufferWidth ?? 4096
     this.lut            = buildLut(options.colorMap ?? interpolateGrayscale)
     this.tooltipEnabled = options.tooltip     ?? false
-    this.minSpan        = options.minSpan     ?? 32
+    this.timeBarEnabled = options.timeBar        ?? false
+    this.timeBarDynamic = options.timeBarDynamic ?? false
+    this.minSpan        = options.minSpan        ?? 32
     this.freqFormat     = options.freqFormat  ?? (hz => hz.toFixed(1))
     this.valueFormat    = options.valueFormat ?? (t  => (t * 100).toFixed(1) + '%')
 
@@ -195,6 +212,8 @@ export class WaterfallRenderer {
 
     if (this.tooltipEnabled) {
       this.valueBuffer = new Float32Array(this.ringWidth * this.rowCount)
+    }
+    if (this.tooltipEnabled || this.timeBarEnabled) {
       this.timeBuffer  = new Float64Array(this.rowCount)
     }
 
@@ -220,6 +239,7 @@ export class WaterfallRenderer {
       this.timeBuffer.copyWithin(rowH, 0, this.rowCount - rowH)
       const ts = f.header[0]?.sent_at ?? Date.now()
       this.timeBuffer.fill(ts, 0, rowH)
+      this.timeBarNow = Date.now()
     }
     if (this.valueBuffer) {
       this.valueBuffer.copyWithin(ringW * rowH, 0, ringW * (this.rowCount - rowH))
@@ -311,6 +331,46 @@ export class WaterfallRenderer {
     }
   }
 
+  private _drawTimeBar(): void {
+    const ctx = this.ctx
+    const tb  = this.timeBuffer
+    if (!ctx || !tb || !this.initialized) return
+
+    const barW = 76
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.fillRect(0, 0, barW, this.rowCount)
+
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = 'rgba(200,210,220,0.9)'
+    ctx.textBaseline = 'middle'
+
+    // Derive ms-per-row from timeBuffer so labels are purely geometric.
+    // Anchor on tb[0] (newest row); each row below adds one rowInterval.
+    // This avoids per-label tb[y] lookups which jump when rows shift.
+    const newestTs = tb[0]
+    if (newestTs <= 0) return
+
+    // Estimate row interval: average over up to 20 rows
+    const sampleRows = Math.min(this.rowCount - 1, 20)
+    const rowIntervalMs = sampleRows > 0 && tb[sampleRows] > 0
+      ? (newestTs - tb[sampleRows]) / sampleRows
+      : 0
+
+    const now            = this.timeBarDynamic ? Date.now() : this.timeBarNow
+    const elapsedNewest  = now - newestTs   // ms since the newest row arrived
+    const step           = 50              // fixed label grid spacing in px
+
+    for (let y = 0; y < this.rowCount; y += step) {
+      const diffMs = elapsedNewest + y * rowIntervalMs
+      const diffS  = diffMs / 1000
+      let label: string
+      if (diffS < 60)        label = `${diffS.toFixed(1)}s ago`
+      else if (diffS < 3600) label = `${(diffS / 60).toFixed(1)}m ago`
+      else                   label = `${(diffS / 3600).toFixed(1)}h ago`
+      ctx.fillText(label, 4, y + step / 2)
+    }
+  }
+
   private _loop(): void {
     const canvas = this.canvas
     const ctx    = this.ctx
@@ -323,6 +383,7 @@ export class WaterfallRenderer {
       const t0 = performance.now()
       this._renderViewport()
       ctx.putImageData(this.viewImg!, 0, 0)
+      if (this.timeBarEnabled) this._drawTimeBar()
       const renderMs = performance.now() - t0
 
       if (this.pendingPushMs >= 0) {
