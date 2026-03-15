@@ -4,6 +4,10 @@
   "description": "High-performance waterfall/spectrogram canvas renderer with React wrapper",
   "keywords": ["waterfall", "spectrogram", "canvas", "sdr", "signal", "react"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hony2323/waterfall-canvas.git"
+  },
   "type": "module",
   "files": ["dist", "LICENSE"],
   "sideEffects": false,
