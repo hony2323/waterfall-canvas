@@ -17,6 +17,11 @@ export interface WaterfallOptions {
    */
   bufferWidth?: number
   /**
+   * Minimum number of ring-buffer pixels visible (= maximum zoom level).
+   * Default: 32. Lower = more zoom possible.
+   */
+  minSpan?: number
+  /**
    * Show a hover tooltip with band, frequency, time, and signal value.
    * Allocates an additional Float32Array (ringWidth × rowCount) for value storage.
    * Default: false.
@@ -51,6 +56,7 @@ export class WaterfallRenderer {
   private readonly bufferWidth: number
   private readonly lut: Uint8Array
   private readonly tooltipEnabled: boolean
+  private readonly minSpan: number
   private readonly freqFormat: (hz: number) => string
   private readonly valueFormat: (t: number) => string
 
@@ -91,6 +97,7 @@ export class WaterfallRenderer {
     this.bufferWidth    = options.bufferWidth ?? 4096
     this.lut            = buildLut(options.colorMap ?? interpolateGrayscale)
     this.tooltipEnabled = options.tooltip     ?? false
+    this.minSpan        = options.minSpan     ?? 32
     this.freqFormat     = options.freqFormat  ?? (hz => hz.toFixed(1))
     this.valueFormat    = options.valueFormat ?? (t  => (t * 100).toFixed(1) + '%')
 
@@ -283,7 +290,7 @@ export class WaterfallRenderer {
       const srcRow = y * ringW
       const dstRow = y * w
       for (let x = 0; x < w; x++) {
-        const srcX = vs + ((x * span / w) | 0)
+        const srcX = vs + (((x + 0.5) * span / w) | 0)
         const si = (srcRow + srcX) * 4
         const di = (dstRow + x) * 4
         dst[di]   = src[si]
@@ -338,7 +345,7 @@ export class WaterfallRenderer {
     const rowFrac    = (e.clientY - rect.top)  / rect.height
 
     // Integer ring pixel — for value buffer lookup (matches what _renderViewport drew)
-    const rx = Math.min(ringW - 1, Math.max(0, vs + ((canvasFrac * span) | 0)))
+    const rx = Math.min(ringW - 1, Math.max(0, vs + (((canvasFrac + 0.5 / rect.width) * span) | 0)))
     const ry = Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
 
     // Continuous ring position → input sample, snapped to nearest sample
@@ -384,7 +391,7 @@ export class WaterfallRenderer {
 
     const span         = this.viewEnd - this.viewStart
     const factor       = e.deltaY > 0 ? 1.15 : 0.85
-    const newSpan      = Math.max(32, Math.min(ringW, span * factor))
+    const newSpan      = Math.max(this.minSpan, Math.min(ringW, span * factor))
     const cursorFrac   = e.offsetX / this.canvas.clientWidth
     const cursorSample = this.viewStart + cursorFrac * span
 
