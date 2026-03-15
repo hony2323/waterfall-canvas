@@ -1,0 +1,40 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for npm provenance
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+
+      # Guard: only publish if the tag sits on the main/master branch
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main || git fetch origin master
+          git merge-base --is-ancestor HEAD origin/main 2>/dev/null || \
+          git merge-base --is-ancestor HEAD origin/master 2>/dev/null || \
+          (echo "❌ Tag must be on main/master branch" && exit 1)
+
+      # prepublishOnly runs build + tests automatically
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
