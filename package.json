@@ -1,6 +1,6 @@
 {
   "name": "@hony2323/waterfall-canvas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "High-performance waterfall/spectrogram canvas renderer with React wrapper",
   "keywords": ["waterfall", "spectrogram", "canvas", "sdr", "signal", "react"],
   "license": "MIT",
