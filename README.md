@@ -35,19 +35,15 @@ React is a peer dependency and is only needed if you use `@hony2323/waterfall-ca
 
 ```ts
 import { WaterfallRenderer, interpolateTurbo } from '@hony2323/waterfall-canvas'
-import type { ParsedFrame } from '@hony2323/waterfall-canvas'
 
 const canvas = document.getElementById('waterfall') as HTMLCanvasElement
 
 const renderer = new WaterfallRenderer(canvas, {
-  rowCount:    400,
   colorMap:    interpolateTurbo,
-  bufferWidth: 0,        // 0 = full input resolution (1:1 sample → pixel)
-  minSpan:     32,       // max zoom: 32 ring pixels visible
   tooltip:     true,
   timeBar:     true,
-  freqFormat:  hz  => (hz / 1e6).toFixed(4) + ' MHz',
-  valueFormat: t   => (t * 100).toFixed(1)  + ' dBFS',
+  freqFormat:  hz => (hz / 1e6).toFixed(2) + ' MHz',
+  valueFormat: t  => (t * 100).toFixed(1)  + ' dBFS',
 })
 
 // push a ParsedFrame whenever new data arrives (WebSocket, worker, etc.)
@@ -61,7 +57,41 @@ renderer.destroy()
 
 ## Quick start — React
 
-Paste this into any React app and you'll see a live scrolling waterfall immediately — no backend needed.
+```tsx
+import { useRef } from 'react'
+import { WaterfallCanvas } from '@hony2323/waterfall-canvas/react'
+import { interpolateTurbo } from '@hony2323/waterfall-canvas'
+import type { WaterfallCanvasHandle } from '@hony2323/waterfall-canvas/react'
+
+const freqFormat = (hz: number) => (hz / 1e6).toFixed(2) + ' MHz'
+const valueFormat = (t: number) => (t * 100).toFixed(1)  + ' dBFS'
+
+export default function Spectrogram() {
+  const ref = useRef<WaterfallCanvasHandle>(null)
+
+  // call ref.current.push(frame) from wherever you receive data
+  // (WebSocket handler, web worker message, etc.)
+
+  return (
+    <WaterfallCanvas
+      ref={ref}
+      colorMap={interpolateTurbo}
+      tooltip
+      timeBar
+      freqFormat={freqFormat}
+      valueFormat={valueFormat}
+    />
+  )
+}
+```
+
+> **Note:** define `freqFormat` and `valueFormat` outside the component (module-level constants or stable refs). Inline arrow functions cause the renderer to be recreated on every render.
+
+---
+
+## Full example — React (self-contained, with metrics)
+
+No backend needed. Generates synthetic FM-band data in the browser.
 
 ```tsx
 import { useEffect, useRef, useState } from 'react'
@@ -70,10 +100,9 @@ import { interpolateTurbo } from '@hony2323/waterfall-canvas'
 import type { WaterfallCanvasHandle } from '@hony2323/waterfall-canvas/react'
 import type { ParsedFrame } from '@hony2323/waterfall-canvas'
 
-// 512 samples across 88–108 MHz (FM band)
 const SAMPLES     = 512
-const FREQ_START  = 88e6
-const FREQ_END    = 108e6
+const FREQ_START  = 88e6   // Hz
+const FREQ_END    = 108e6  // Hz
 const INTERVAL_MS = 100
 
 const freqFormat = (hz: number) => (hz / 1e6).toFixed(2) + ' MHz'
@@ -82,7 +111,6 @@ const valueFormat = (t: number) => (t * 100).toFixed(1)  + ' dBFS'
 function generateFrame(): ParsedFrame {
   const data = new Uint8Array(SAMPLES)
   for (let i = 0; i < SAMPLES; i++) {
-    // Noise floor ~20%, occasional spikes
     data[i] = Math.random() < 0.02
       ? 60 + Math.random() * 40   // spike: 60–100
       : 5  + Math.random() * 20   // noise: 5–25
@@ -104,14 +132,13 @@ function generateFrame(): ParsedFrame {
 export default function Spectrogram() {
   const ref = useRef<WaterfallCanvasHandle>(null)
 
-  // ── metrics (remove this block to hide) ────────────────────────────────────
+  // metrics — remove this block and onMetrics prop to hide
   const [push,   setPush]   = useState(0)
   const [render, setRender] = useState(0)
   const [lazy,   setLazy]   = useState(false)
   const onMetrics = (pushMs: number, renderMs: number, isLazy: boolean) => {
     setPush(pushMs);  setRender(renderMs);  setLazy(isLazy)
   }
-  // ───────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const id = setInterval(() => ref.current?.push(generateFrame()), INTERVAL_MS)
@@ -120,7 +147,7 @@ export default function Spectrogram() {
 
   return (
     <div>
-      {/* remove this block to hide metrics */}
+      {/* metrics — remove this div and the block above to hide */}
       <div style={{ fontFamily: 'monospace', fontSize: 12, padding: '4px 8px', background: '#111', color: '#ccc' }}>
         push {push.toFixed(2)} ms · render {render.toFixed(2)} ms · {lazy ? 'lazy' : 'precise'}
       </div>
@@ -128,8 +155,6 @@ export default function Spectrogram() {
       <WaterfallCanvas
         ref={ref}
         colorMap={interpolateTurbo}
-        bufferWidth={0}
-        minSpan={32}
         rowHeight={2}
         heightPx={400}
         tooltip
@@ -143,7 +168,61 @@ export default function Spectrogram() {
 }
 ```
 
-> **Note:** define `freqFormat` and `valueFormat` outside the component (module-level constants or stable refs). Inline arrow functions cause the renderer to be recreated on every render.
+---
+
+## Full example — vanilla (self-contained, with metrics)
+
+```ts
+import { WaterfallRenderer, interpolateTurbo } from '@hony2323/waterfall-canvas'
+import type { ParsedFrame } from '@hony2323/waterfall-canvas'
+
+const SAMPLES     = 512
+const FREQ_START  = 88e6
+const FREQ_END    = 108e6
+const INTERVAL_MS = 100
+
+function generateFrame(): ParsedFrame {
+  const data = new Uint8Array(SAMPLES)
+  for (let i = 0; i < SAMPLES; i++) {
+    data[i] = Math.random() < 0.02
+      ? 60 + Math.random() * 40
+      : 5  + Math.random() * 20
+  }
+  return {
+    header: [{
+      band_id:    'band_0',
+      band_start: FREQ_START,
+      band_end:   FREQ_END,
+      timestamp:  new Date().toISOString(),
+      sent_at:    Date.now(),
+      length:     SAMPLES,
+      precision:  'uint8',
+    }],
+    bands: { band_0: data },
+  }
+}
+
+const canvas = document.getElementById('waterfall') as HTMLCanvasElement
+
+// metrics — remove onMetrics to hide
+const metricsEl = document.getElementById('metrics') as HTMLElement
+const onMetrics = (pushMs: number, renderMs: number, isLazy: boolean) => {
+  metricsEl.textContent =
+    `push ${pushMs.toFixed(2)} ms · render ${renderMs.toFixed(2)} ms · ${isLazy ? 'lazy' : 'precise'}`
+}
+
+const renderer = new WaterfallRenderer(canvas, {
+  colorMap:    interpolateTurbo,
+  rowHeight:   2,
+  tooltip:     true,
+  timeBar:     true,
+  freqFormat:  hz => (hz / 1e6).toFixed(2) + ' MHz',
+  valueFormat: t  => (t * 100).toFixed(1)  + ' dBFS',
+  onMetrics,   // remove to hide metrics
+})
+
+setInterval(() => renderer.push(generateFrame()), INTERVAL_MS)
+```
 
 ---
 
