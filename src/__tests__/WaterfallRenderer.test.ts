@@ -213,13 +213,14 @@ describe('WaterfallRenderer — push', () => {
     expect(priv(renderer).timeBuffer).toBeInstanceOf(Float64Array)
   })
 
-  it('stores sent_at in timeBuffer row 0', () => {
+  it('stores sent_at in timeBuffer at headRow', () => {
     renderer = new WaterfallRenderer(canvas, { timeBar: true })
     const frame = makeFrame()
     const sentAt = frame.header[0].sent_at
     renderer.push(frame)
-    const tb = priv(renderer).timeBuffer as Float64Array
-    expect(tb[0]).toBe(sentAt)
+    const p = priv(renderer)
+    const tb = p.timeBuffer as Float64Array
+    expect(tb[p.headRow as number]).toBe(sentAt)
   })
 })
 
