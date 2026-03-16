@@ -50,8 +50,8 @@ const renderer = new WaterfallRenderer(canvas, {
   valueFormat: t   => (t * 100).toFixed(1)  + ' dBFS',
 })
 
-// push a parsed frame whenever new data arrives
-renderer.push(frame satisfies ParsedFrame)
+// push a ParsedFrame whenever new data arrives (WebSocket, worker, etc.)
+renderer.push(frame)
 
 // clean up
 renderer.destroy()
@@ -61,20 +61,53 @@ renderer.destroy()
 
 ## Quick start — React
 
+Paste this into any React app and you'll see a live scrolling waterfall immediately — no backend needed.
+
 ```tsx
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { WaterfallCanvas } from '@hony2323/waterfall-canvas/react'
 import { interpolateTurbo } from '@hony2323/waterfall-canvas'
 import type { WaterfallCanvasHandle } from '@hony2323/waterfall-canvas/react'
+import type { ParsedFrame } from '@hony2323/waterfall-canvas'
 
-const freqFormat = (hz: number) => (hz / 1e6).toFixed(4) + ' MHz'
-const valueFormat = (t: number)  => (t * 100).toFixed(1)  + ' dBFS'
+// 512 samples across 88–108 MHz (FM band)
+const SAMPLES     = 512
+const FREQ_START  = 88e6
+const FREQ_END    = 108e6
+const INTERVAL_MS = 100
 
-export function Spectrogram() {
+const freqFormat = (hz: number) => (hz / 1e6).toFixed(2) + ' MHz'
+const valueFormat = (t: number) => (t * 100).toFixed(1)  + ' dBFS'
+
+function generateFrame(): ParsedFrame {
+  const data = new Uint8Array(SAMPLES)
+  for (let i = 0; i < SAMPLES; i++) {
+    // Noise floor ~20%, occasional spikes
+    data[i] = Math.random() < 0.02
+      ? 60 + Math.random() * 40   // spike: 60–100
+      : 5  + Math.random() * 20   // noise: 5–25
+  }
+  return {
+    header: [{
+      band_id:    'band_0',
+      band_start: FREQ_START,
+      band_end:   FREQ_END,
+      timestamp:  new Date().toISOString(),
+      sent_at:    Date.now(),
+      length:     SAMPLES,
+      precision:  'uint8',
+    }],
+    bands: { band_0: data },
+  }
+}
+
+export default function Spectrogram() {
   const ref = useRef<WaterfallCanvasHandle>(null)
 
-  // call ref.current.push(frame) from wherever you receive data
-  // (WebSocket handler, web worker message, etc.)
+  useEffect(() => {
+    const id = setInterval(() => ref.current?.push(generateFrame()), INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [])
 
   return (
     <WaterfallCanvas
@@ -82,13 +115,12 @@ export function Spectrogram() {
       colorMap={interpolateTurbo}
       bufferWidth={0}
       minSpan={32}
-      rowHeight={1}
+      rowHeight={2}
       heightPx={400}
       tooltip
       timeBar
       freqFormat={freqFormat}
       valueFormat={valueFormat}
-      onMetrics={(pushMs, renderMs, isLazy) => console.log(pushMs, renderMs, isLazy)}
     />
   )
 }
