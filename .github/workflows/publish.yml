@@ -28,7 +28,7 @@ jobs:
 
       - name: Bump patch version
         run: |
-          CURRENT=$(npm view @hony2323/waterfall-canvas version 2>/dev/null || echo "0.1.2")
+          CURRENT=$(npm view @hony2323/waterfall-canvas version 2>/dev/null || echo "0.1.1")
           NEXT=$(node -e "const [a,b,c]='$CURRENT'.split('.').map(Number); console.log(a+'.'+b+'.'+(c+1))")
           npm version $NEXT --no-git-tag-version
           echo "Publishing version $NEXT"
