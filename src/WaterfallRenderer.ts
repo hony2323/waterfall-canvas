@@ -38,7 +38,7 @@ export interface WaterfallOptions {
    */
   valueFormat?: (t: number) => string
   /**
-   * Show a time axis on the left edge of the canvas with HH:MM:SS labels.
+   * Show a time axis on the left edge of the canvas with time-ago labels.
    * Reads from the same timeBuffer as the tooltip (allocated when either is true).
    * Default: false.
    */
@@ -48,6 +48,17 @@ export interface WaterfallOptions {
    * When false (default), labels only update when new data arrives — no jumping.
    */
   timeBarDynamic?: boolean
+}
+
+export interface ExportImageOptions {
+  /**
+   * Image format.
+   * - `'bmp'` — uncompressed, single file, no size limit (default)
+   * - `'png'` — compressed, tiled into multiple files if width > 32,767px
+   */
+  format?: 'bmp' | 'png'
+  /** Base filename without extension. Default: `'waterfall'` */
+  filename?: string
 }
 
 interface BandRange {
@@ -79,10 +90,13 @@ export class WaterfallRenderer {
   private viewImg: ImageData | null = null
   private ctx: CanvasRenderingContext2D | null = null
 
-  // Optional tooltip buffers — only allocated when tooltip: true
+  // Optional buffers — allocated when tooltip or timeBar is true
   private valueBuffer: Float32Array | null = null   // normalized [0,1] per ring pixel
   private timeBuffer: Float64Array | null = null    // ms epoch per row
   private tooltipEl: HTMLDivElement | null = null
+
+  // Ring cursor: headRow is the physical row index of the most-recently-written row
+  private headRow = 0
 
   private dirty = false
   private viewDirty = true
@@ -97,7 +111,7 @@ export class WaterfallRenderer {
 
   private dragActive = false
   private lastDragX = 0
-  private lastMouseEvent: MouseEvent | null = null   // kept for rAF tooltip refresh
+  private lastMouseEvent: MouseEvent | null = null
 
   private readonly ro: ResizeObserver
   private readonly _boundLoop: FrameRequestCallback
@@ -108,15 +122,15 @@ export class WaterfallRenderer {
 
   constructor(canvas: HTMLCanvasElement, options: WaterfallOptions = {}) {
     this.canvas         = canvas
-    this.rowCount       = options.rowCount    ?? 400
-    this.bufferWidth    = options.bufferWidth ?? 4096
+    this.rowCount       = options.rowCount       ?? 400
+    this.bufferWidth    = options.bufferWidth    ?? 4096
     this.lut            = buildLut(options.colorMap ?? interpolateGrayscale)
-    this.tooltipEnabled = options.tooltip     ?? false
+    this.tooltipEnabled = options.tooltip        ?? false
     this.timeBarEnabled = options.timeBar        ?? false
     this.timeBarDynamic = options.timeBarDynamic ?? false
     this.minSpan        = options.minSpan        ?? 32
-    this.freqFormat     = options.freqFormat  ?? (hz => hz.toFixed(1))
-    this.valueFormat    = options.valueFormat ?? (t  => (t * 100).toFixed(1) + '%')
+    this.freqFormat     = options.freqFormat     ?? (hz => hz.toFixed(1))
+    this.valueFormat    = options.valueFormat    ?? (t  => (t * 100).toFixed(1) + '%')
 
     if (this.tooltipEnabled) {
       const el = document.createElement('div')
@@ -137,7 +151,7 @@ export class WaterfallRenderer {
     this._boundMouseUp   = this._onMouseUp.bind(this)
 
     this.ro = new ResizeObserver(() => {
-      canvas.width = canvas.offsetWidth
+      canvas.width  = canvas.offsetWidth
       canvas.height = this.rowCount
       this.viewDirty = true
     })
@@ -160,6 +174,59 @@ export class WaterfallRenderer {
     const t0 = performance.now()
     this._pushRow(frame)
     this.pendingPushMs = performance.now() - t0
+  }
+
+  /**
+   * Download the full ring buffer as an image file.
+   * BMP is uncompressed and has no size limit; PNG is tiled when width > 32,767px.
+   */
+  exportImage(options: ExportImageOptions = {}): void {
+    const img = this.imgData
+    if (!img) return
+    const { format = 'bmp', filename = 'waterfall' } = options
+
+    // Compose a logically-ordered copy (ring cursor means physical rows are not in order)
+    const getOrdered = (): ImageData => {
+      const ringW   = this.ringWidth
+      const rc      = this.rowCount
+      const ordered = new Uint8ClampedArray(ringW * rc * 4)
+      for (let y = 0; y < rc; y++) {
+        const physRow = (this.headRow + y) % rc
+        const src     = physRow * ringW * 4
+        ordered.set(img.data.subarray(src, src + ringW * 4), y * ringW * 4)
+      }
+      return new ImageData(ordered, ringW, rc)
+    }
+
+    if (format === 'bmp') {
+      setTimeout(() => this._triggerDownload(this._encodeBmp(getOrdered()), `${filename}.bmp`), 0)
+      return
+    }
+
+    // PNG: tile into 30,000px-wide chunks to stay under Chrome's 32,767px limit
+    const ordered  = getOrdered()
+    const totalW   = ordered.width
+    const h        = ordered.height
+    const tileW    = 30000
+    const numTiles = Math.ceil(totalW / tileW)
+
+    for (let t = 0; t < numTiles; t++) {
+      const x0       = t * tileW
+      const w        = Math.min(tileW, totalW - x0)
+      const tileData = new Uint8ClampedArray(w * h * 4)
+      for (let row = 0; row < h; row++) {
+        const src = (row * totalW + x0) * 4
+        tileData.set(ordered.data.subarray(src, src + w * 4), row * w * 4)
+      }
+      const c = document.createElement('canvas')
+      c.width  = w
+      c.height = h
+      c.getContext('2d')!.putImageData(new ImageData(tileData, w, h), 0, 0)
+      const name = numTiles > 1 ? `${filename}_${t + 1}of${numTiles}.png` : `${filename}.png`
+      setTimeout(() => {
+        c.toBlob(blob => { if (blob) this._triggerDownload(blob, name) }, 'image/png')
+      }, t * 300)
+    }
   }
 
   destroy(): void {
@@ -214,9 +281,10 @@ export class WaterfallRenderer {
       this.valueBuffer = new Float32Array(this.ringWidth * this.rowCount)
     }
     if (this.tooltipEnabled || this.timeBarEnabled) {
-      this.timeBuffer  = new Float64Array(this.rowCount)
+      this.timeBuffer = new Float64Array(this.rowCount)
     }
 
+    this.headRow     = 0
     this.viewStart   = 0
     this.viewEnd     = this.ringWidth
     this.initialized = true
@@ -230,25 +298,20 @@ export class WaterfallRenderer {
     const ringW = this.ringWidth
     const total = this.totalSamples
     const rowH  = Math.max(1, this.rowHeight | 0)
+    const rc    = this.rowCount
     const buf   = img.data
     const lut   = this.lut
 
-    buf.copyWithin(ringW * 4 * rowH, 0, ringW * (this.rowCount - rowH) * 4)
+    // Advance ring cursor — new row goes at logical top, no bulk copy needed
+    this.headRow = (this.headRow - rowH + rc) % rc
+    const head   = this.headRow
 
-    if (this.timeBuffer) {
-      this.timeBuffer.copyWithin(rowH, 0, this.rowCount - rowH)
-      const ts = f.header[0]?.sent_at ?? Date.now()
-      this.timeBuffer.fill(ts, 0, rowH)
-      this.timeBarNow = Date.now()
-    }
-    if (this.valueBuffer) {
-      this.valueBuffer.copyWithin(ringW * rowH, 0, ringW * (this.rowCount - rowH))
-    }
+    // Write new row at physical position `head`
+    let px = head * ringW * 4
 
-    let px = 0
     if (ringW === total) {
       // Fast path: 1:1, no downsampling
-      let vi = 0
+      let vi = head * ringW
       for (const band of f.header) {
         const samples   = f.bands[band.band_id]
         if (!samples) continue
@@ -275,7 +338,7 @@ export class WaterfallRenderer {
             break
           }
         }
-        if (this.valueBuffer) this.valueBuffer[x] = t
+        if (this.valueBuffer) this.valueBuffer[head * ringW + x] = t
         const idx = Math.min(255, Math.max(0, Math.round(t * 255)))
         buf[px++] = lut[idx * 3]
         buf[px++] = lut[idx * 3 + 1]
@@ -284,9 +347,22 @@ export class WaterfallRenderer {
       }
     }
 
+    // For rowH > 1: copy the new row to adjacent physical rows (only ringW pixels each)
+    const src0 = head * ringW * 4
     for (let row = 1; row < rowH; row++) {
-      buf.copyWithin(row * ringW * 4, 0, ringW * 4)
-      if (this.valueBuffer) this.valueBuffer.copyWithin(row * ringW, 0, ringW)
+      const physRow = (head + row) % rc
+      buf.copyWithin(physRow * ringW * 4, src0, src0 + ringW * 4)
+      if (this.valueBuffer) {
+        this.valueBuffer.copyWithin(physRow * ringW, head * ringW, head * ringW + ringW)
+      }
+    }
+
+    if (this.timeBuffer) {
+      const ts = f.header[0]?.sent_at ?? Date.now()
+      for (let row = 0; row < rowH; row++) {
+        this.timeBuffer[(head + row) % rc] = ts
+      }
+      this.timeBarNow = Date.now()
     }
 
     this.dirty = true
@@ -298,18 +374,20 @@ export class WaterfallRenderer {
     if (!src || !vData) return
 
     const ringW = this.ringWidth
+    const rc    = this.rowCount
     const vs    = this.viewStart | 0
     const span  = (this.viewEnd | 0) - vs
     if (span <= 0) return
 
-    const dst = vData.data
-    const w   = vData.width
-    const h   = this.rowCount
+    const dst  = vData.data
+    const w    = vData.width
+    const head = this.headRow
 
-    for (let y = 0; y < h; y++) {
-      const srcRow = y * ringW
-      const dstRow = y * w
-      const vRow   = this.valueBuffer ? y * ringW : -1
+    for (let y = 0; y < rc; y++) {
+      const physRow = (head + y) % rc
+      const srcRow  = physRow * ringW
+      const dstRow  = y * w
+      const vRow    = this.valueBuffer ? physRow * ringW : -1
       for (let x = 0; x < w; x++) {
         const x0 = vs + ((x       * span / w) | 0)
         const x1 = Math.min(ringW, vs + (((x + 1) * span / w) | 0))
@@ -344,21 +422,20 @@ export class WaterfallRenderer {
     ctx.fillStyle    = 'rgba(200,210,220,0.9)'
     ctx.textBaseline = 'middle'
 
-    // Derive ms-per-row from timeBuffer so labels are purely geometric.
-    // Anchor on tb[0] (newest row); each row below adds one rowInterval.
-    // This avoids per-label tb[y] lookups which jump when rows shift.
-    const newestTs = tb[0]
+    // Newest row is at headRow in the physical buffer
+    const newestTs = tb[this.headRow]
     if (newestTs <= 0) return
 
-    // Estimate row interval: average over up to 20 rows
+    // Estimate ms-per-row from physical buffer
     const sampleRows = Math.min(this.rowCount - 1, 20)
-    const rowIntervalMs = sampleRows > 0 && tb[sampleRows] > 0
-      ? (newestTs - tb[sampleRows]) / sampleRows
+    const olderPhys  = (this.headRow + sampleRows) % this.rowCount
+    const rowIntervalMs = sampleRows > 0 && tb[olderPhys] > 0
+      ? (newestTs - tb[olderPhys]) / sampleRows
       : 0
 
-    const now            = this.timeBarDynamic ? Date.now() : this.timeBarNow
-    const elapsedNewest  = now - newestTs   // ms since the newest row arrived
-    const step           = 50              // fixed label grid spacing in px
+    const now           = this.timeBarDynamic ? Date.now() : this.timeBarNow
+    const elapsedNewest = now - newestTs
+    const step          = 50
 
     for (let y = 0; y < this.rowCount; y += step) {
       const diffMs = elapsedNewest + y * rowIntervalMs
@@ -406,53 +483,95 @@ export class WaterfallRenderer {
     const timeBuffer  = this.timeBuffer
     if (!el || !valueBuffer || !timeBuffer || !this.initialized) return
 
-    const ringW  = this.ringWidth
-    // Mirror _renderViewport: use integer-truncated view bounds
-    const vs     = this.viewStart | 0
-    const span   = (this.viewEnd | 0) - vs
+    const ringW = this.ringWidth
+    const vs    = this.viewStart | 0
+    const span  = (this.viewEnd | 0) - vs
 
     const rect       = this.canvas.getBoundingClientRect()
     const canvasFrac = (e.clientX - rect.left) / rect.width
     const rowFrac    = (e.clientY - rect.top)  / rect.height
 
-    // Integer ring pixel — for value buffer lookup (matches what _renderViewport drew)
-    const rx = Math.min(ringW - 1, Math.max(0, vs + (((canvasFrac + 0.5 / rect.width) * span) | 0)))
-    const ry = Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
+    const rx      = Math.min(ringW - 1, Math.max(0, vs + (((canvasFrac + 0.5 / rect.width) * span) | 0)))
+    const logicRy = Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
+    const physRy  = (this.headRow + logicRy) % this.rowCount
 
-    // Continuous ring position → input sample, snapped to nearest sample
-    // so freq is always an exact multiple of the band step
     const ringXf = vs + canvasFrac * span
     const srcXf  = ringW === this.totalSamples
       ? ringXf
       : ringXf * (this.totalSamples / ringW)
     const srcXc  = Math.max(0, Math.min(this.totalSamples - 1, Math.round(srcXf)))
 
-    // Find band using continuous position; fall back to last band at right edge
     let band: BandRange = this.bandRanges[this.bandRanges.length - 1]
     for (const range of this.bandRanges) {
       if (srcXc < range.end) { band = range; break }
     }
 
-    const level = valueBuffer[ry * ringW + rx]
-    const ts      = timeBuffer[ry]
+    const level   = valueBuffer[physRy * ringW + rx]
+    const ts      = timeBuffer[physRy]
     const timeStr = ts > 0 ? new Date(ts).toISOString().slice(11, 23) + ' UTC' : '—'
 
     const offsetInBand = Math.max(0, srcXc - band.start)
     const bandSamples  = band.end - band.start
-    const freq = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
-    const freqLine = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
+    const freq         = band.freqStart + (offsetInBand / bandSamples) * (band.freqEnd - band.freqStart)
+    const freqLine     = `${band.id}  (${this.freqFormat(band.freqStart)} – ${this.freqFormat(band.freqEnd)})\nfreq:  ${this.freqFormat(freq)}\n`
 
-    el.textContent = `${freqLine}time:  ${timeStr}\nvalue: ${this.valueFormat(level)}`
+    el.textContent   = `${freqLine}time:  ${timeStr}\nvalue: ${this.valueFormat(level)}`
     el.style.display = 'block'
 
-    // Position near cursor, nudge away from edges
-    const pad = 16
-    const tw  = el.offsetWidth  || 140
-    const th  = el.offsetHeight || 80
+    const pad  = 16
+    const tw   = el.offsetWidth  || 140
+    const th   = el.offsetHeight || 80
     const left = e.clientX + 14 + tw > window.innerWidth  ? e.clientX - tw - 6 : e.clientX + 14
     const top  = e.clientY - 10 < pad                     ? e.clientY + 14      : e.clientY - 10
     el.style.left = `${Math.max(pad, Math.min(window.innerWidth  - tw  - pad, left))}px`
     el.style.top  = `${Math.max(pad, Math.min(window.innerHeight - th  - pad, top ))}px`
+  }
+
+  private _encodeBmp(img: ImageData): Blob {
+    const w              = img.width
+    const h              = img.height
+    const src            = img.data
+    const rowBytes       = w * 3
+    const padding        = (4 - (rowBytes % 4)) % 4
+    const paddedRowBytes = rowBytes + padding
+    const pixelDataSize  = paddedRowBytes * h
+    const buf            = new ArrayBuffer(54 + pixelDataSize)
+    const view           = new DataView(buf)
+    const bytes          = new Uint8Array(buf)
+
+    bytes[0] = 0x42; bytes[1] = 0x4D
+    view.setUint32(2,  54 + pixelDataSize, true)
+    view.setUint32(10, 54, true)
+    view.setUint32(14, 40,  true)
+    view.setInt32 (18, w,   true)
+    view.setInt32 (22, -h,  true)
+    view.setUint16(26, 1,   true)
+    view.setUint16(28, 24,  true)
+    view.setUint32(34, pixelDataSize, true)
+
+    let dst = 54
+    for (let row = 0; row < h; row++) {
+      const rowStart = row * w * 4
+      for (let x = 0; x < w; x++) {
+        const s = rowStart + x * 4
+        bytes[dst++] = src[s + 2]
+        bytes[dst++] = src[s + 1]
+        bytes[dst++] = src[s]
+      }
+      dst += padding
+    }
+
+    return new Blob([buf], { type: 'image/bmp' })
+  }
+
+  private _triggerDownload(blob: Blob, filename: string): void {
+    const a = document.createElement('a')
+    a.href  = URL.createObjectURL(blob)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(a.href)
   }
 
   private _onWheel(e: WheelEvent): void {
