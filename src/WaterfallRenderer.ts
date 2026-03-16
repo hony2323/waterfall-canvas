@@ -283,8 +283,7 @@ export class WaterfallRenderer {
     new Uint32Array(img.data.buffer).fill(0xFF000000)
     this.imgData = img
 
-    this.viewImg = new ImageData(this.canvas.width || 800, this.rowCount)
-    this.ctx     = this.canvas.getContext('2d')!
+    this.ctx = this.canvas.getContext('2d')!
 
     if (this.tooltipEnabled) {
       this.valueBuffer = new Float32Array(this.ringWidth * this.rowCount)
@@ -408,21 +407,17 @@ export class WaterfallRenderer {
             const v = this.valueBuffer![vRow + sx]
             if (v > bestVal) { bestVal = v; srcX = sx }
           }
-        } else if (x1 > x0 + 1) {
+        } else if (vRow >= 0 && x1 > x0 + 1) {
           // Lazy: max over strided grid points only (multiples of lazyThreshold).
           // Grid positions are absolute in the buffer — zoom-invariant — so the
           // same source frequencies are always candidates regardless of zoom level.
           const stride    = this.lazyThreshold
           const firstGrid = Math.ceil(x0 / stride) * stride
           if (firstGrid < x1) {
-            if (vRow >= 0) {
-              let bestVal = -1
-              for (let sx = firstGrid; sx < x1; sx += stride) {
-                const v = this.valueBuffer![vRow + sx]
-                if (v > bestVal) { bestVal = v; srcX = sx }
-              }
-            } else {
-              srcX = firstGrid
+            let bestVal = -1
+            for (let sx = firstGrid; sx < x1; sx += stride) {
+              const v = this.valueBuffer![vRow + sx]
+              if (v > bestVal) { bestVal = v; srcX = sx }
             }
           }
         }
