@@ -13,6 +13,10 @@ High-performance waterfall / spectrogram canvas renderer with an optional React 
 - Pluggable colormaps (grayscale, hot, turbo, or your own)
 - Tree-shakeable, dual ESM/CJS, full TypeScript types
 
+**Performance** (Chrome, mid-range laptop)
+- 30+ FPS with ~2,000 bins
+- ~10 FPS with ~70,000 bins
+
 ---
 
 ## Install
