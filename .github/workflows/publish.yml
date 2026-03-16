@@ -11,7 +11,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -28,12 +28,10 @@ jobs:
 
       - name: Bump patch version
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch --no-git-tag-version
-          git add package.json
-          git commit -m "chore: bump version to $(node -p "require('./package.json').version") [skip ci]"
-          git push
+          CURRENT=$(npm view @hony2323/waterfall-canvas version 2>/dev/null || echo "0.0.0")
+          NEXT=$(node -e "const [a,b,c]='$CURRENT'.split('.').map(Number); console.log(a+'.'+b+'.'+(c+1))")
+          npm version $NEXT --no-git-tag-version
+          echo "Publishing version $NEXT"
 
       - run: npm publish
         env:
