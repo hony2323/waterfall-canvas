@@ -64,7 +64,7 @@ renderer.destroy()
 Paste this into any React app and you'll see a live scrolling waterfall immediately — no backend needed.
 
 ```tsx
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { WaterfallCanvas } from '@hony2323/waterfall-canvas/react'
 import { interpolateTurbo } from '@hony2323/waterfall-canvas'
 import type { WaterfallCanvasHandle } from '@hony2323/waterfall-canvas/react'
@@ -104,24 +104,41 @@ function generateFrame(): ParsedFrame {
 export default function Spectrogram() {
   const ref = useRef<WaterfallCanvasHandle>(null)
 
+  // ── metrics (remove this block to hide) ────────────────────────────────────
+  const [push,   setPush]   = useState(0)
+  const [render, setRender] = useState(0)
+  const [lazy,   setLazy]   = useState(false)
+  const onMetrics = (pushMs: number, renderMs: number, isLazy: boolean) => {
+    setPush(pushMs);  setRender(renderMs);  setLazy(isLazy)
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     const id = setInterval(() => ref.current?.push(generateFrame()), INTERVAL_MS)
     return () => clearInterval(id)
   }, [])
 
   return (
-    <WaterfallCanvas
-      ref={ref}
-      colorMap={interpolateTurbo}
-      bufferWidth={0}
-      minSpan={32}
-      rowHeight={2}
-      heightPx={400}
-      tooltip
-      timeBar
-      freqFormat={freqFormat}
-      valueFormat={valueFormat}
-    />
+    <div>
+      {/* remove this block to hide metrics */}
+      <div style={{ fontFamily: 'monospace', fontSize: 12, padding: '4px 8px', background: '#111', color: '#ccc' }}>
+        push {push.toFixed(2)} ms · render {render.toFixed(2)} ms · {lazy ? 'lazy' : 'precise'}
+      </div>
+
+      <WaterfallCanvas
+        ref={ref}
+        colorMap={interpolateTurbo}
+        bufferWidth={0}
+        minSpan={32}
+        rowHeight={2}
+        heightPx={400}
+        tooltip
+        timeBar
+        freqFormat={freqFormat}
+        valueFormat={valueFormat}
+        onMetrics={onMetrics}
+      />
+    </div>
   )
 }
 ```
