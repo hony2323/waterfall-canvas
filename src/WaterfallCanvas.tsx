@@ -1,9 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { WaterfallRenderer } from './WaterfallRenderer'
 import type { ParsedFrame } from './types'
+import type { ExportImageOptions } from './WaterfallRenderer'
 
 export interface WaterfallCanvasHandle {
   push(frame: ParsedFrame): void
+  exportImage(options?: ExportImageOptions): void
 }
 
 export interface WaterfallCanvasProps {
@@ -30,7 +32,8 @@ export const WaterfallCanvas = forwardRef<WaterfallCanvasHandle, WaterfallCanvas
     onMetricsRef.current = onMetrics
 
     useImperativeHandle(ref, () => ({
-      push: (frame) => rendererRef.current?.push(frame),
+      push:        (frame)    => rendererRef.current?.push(frame),
+      exportImage: (options?) => rendererRef.current?.exportImage(options),
     }), [])
 
     useEffect(() => {
