@@ -9,7 +9,9 @@ High-performance waterfall / spectrogram canvas renderer with an optional React 
 - Multi-band support — bands rendered side-by-side with gap lines
 - Hover tooltip with frequency, signal value, and timestamp
 - Optional time-ago bar on the left edge
-- Max-value pooling so narrow spikes are always visible at full zoom-out
+- Max-value pooling so narrow spikes are always visible when zoomed out
+- `lazyThreshold` for a consistent speed/accuracy trade-off at extreme zoom-out
+- Full image export (BMP or tiled PNG)
 - Pluggable colormaps (grayscale, hot, turbo, or your own)
 - Tree-shakeable, dual ESM/CJS, full TypeScript types
 
@@ -86,7 +88,7 @@ export function Spectrogram() {
       timeBar
       freqFormat={freqFormat}
       valueFormat={valueFormat}
-      onMetrics={(pushMs, renderMs) => console.log(pushMs, renderMs)}
+      onMetrics={(pushMs, renderMs, isLazy) => console.log(pushMs, renderMs, isLazy)}
     />
   )
 }
@@ -160,6 +162,7 @@ ws.onmessage = ({ data }) => {
 | `tooltip` | `boolean` | `false` | Show hover tooltip with band / freq / value / time |
 | `timeBar` | `boolean` | `false` | Show time-ago labels on the left edge |
 | `timeBarDynamic` | `boolean` | `false` | When `true`, time-ago updates every rAF tick; when `false`, only on new data |
+| `lazyThreshold` | `number` | `8` | Source-pixels-per-output-pixel ratio above which the max-value scan is replaced by a strided scan over fixed grid positions. Keeps spike visibility consistent across zoom levels while limiting render cost. Set to `Infinity` to always use full scan |
 | `freqFormat` | `(hz: number) => string` | `hz.toFixed(1)` | Formats the frequency in the tooltip |
 | `valueFormat` | `(t: number) => string` | `(t*100).toFixed(1)+'%'` | Formats the signal value (`t` is normalized 0–1) |
 
@@ -168,9 +171,17 @@ ws.onmessage = ({ data }) => {
 | Member | Description |
 |--------|-------------|
 | `push(frame: ParsedFrame)` | Add a new row. Initializes the renderer on the first call |
+| `exportImage(options?)` | Download the full ring buffer as an image file. See `ExportImageOptions` below |
 | `rowHeight: number` | Pixel height of each time-slice row. Can be set at any time |
-| `onMetrics?: (pushMs, renderMs) => void` | Called after each render with timing data |
+| `onMetrics?: (pushMs, renderMs, isLazy) => void` | Called after each render. `isLazy` is `true` when the strided scan was used instead of the full max-value scan |
 | `destroy()` | Cancel rAF, remove event listeners, free buffers |
+
+#### `ExportImageOptions`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `format` | `'bmp' \| 'png'` | `'bmp'` | BMP is uncompressed with no size limit. PNG is tiled into multiple files when width > 32,767 px |
+| `filename` | `string` | `'waterfall'` | Base filename without extension |
 
 #### Interaction
 
@@ -187,10 +198,11 @@ All `WaterfallOptions` fields are available as props, plus:
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
-| `ref` | `WaterfallCanvasHandle` | — | Exposes `push(frame)` imperatively |
+| `ref` | `WaterfallCanvasHandle` | — | Exposes `push(frame)` and `exportImage(options?)` imperatively |
 | `heightPx` | `number` | `400` | CSS height of the canvas element |
 | `rowHeight` | `number` | `1` | Passed to renderer; updates without recreating |
-| `onMetrics` | `(pushMs, renderMs) => void` | — | Render timing callback |
+| `lazyThreshold` | `number` | `8` | See `WaterfallOptions` above |
+| `onMetrics` | `(pushMs, renderMs, isLazy) => void` | — | Render timing callback; `isLazy` reflects whether the strided scan was active |
 
 `rowHeight` and `heightPx` changes are applied without tearing down the renderer. All other prop changes recreate it.
 
