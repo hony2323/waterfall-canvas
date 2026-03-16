@@ -162,7 +162,7 @@ ws.onmessage = ({ data }) => {
 | `tooltip` | `boolean` | `false` | Show hover tooltip with band / freq / value / time |
 | `timeBar` | `boolean` | `false` | Show time-ago labels on the left edge |
 | `timeBarDynamic` | `boolean` | `false` | When `true`, time-ago updates every rAF tick; when `false`, only on new data |
-| `lazyThreshold` | `number` | `4` | Source-pixels-per-output-pixel ratio above which the max-value scan is replaced by a strided scan over fixed grid positions. Keeps spike visibility consistent across zoom levels while limiting render cost. Set to `Infinity` to always use full scan |
+| `lazyThreshold` | `number` | `4` | Source-pixels-per-output-pixel ratio above which rendering becomes **approximate**: the full per-pixel max-value scan is replaced by a strided scan over fixed grid positions (multiples of `lazyThreshold`). This is intentional — at extreme zoom-out the scan dominates render time, and sub-pixel spikes are not visible anyway. Grid positions are zoom-invariant, so spike visibility is consistent as you zoom. Set to `Infinity` to always use the full scan |
 | `freqFormat` | `(hz: number) => string` | `hz.toFixed(1)` | Formats the frequency in the tooltip |
 | `valueFormat` | `(t: number) => string` | `(t*100).toFixed(1)+'%'` | Formats the signal value (`t` is normalized 0–1) |
 
@@ -201,7 +201,7 @@ All `WaterfallOptions` fields are available as props, plus:
 | `ref` | `WaterfallCanvasHandle` | — | Exposes `push(frame)` and `exportImage(options?)` imperatively |
 | `heightPx` | `number` | `400` | CSS height of the canvas element |
 | `rowHeight` | `number` | `1` | Passed to renderer; updates without recreating |
-| `lazyThreshold` | `number` | `8` | See `WaterfallOptions` above |
+| `lazyThreshold` | `number` | `4` | See `WaterfallOptions` above |
 | `onMetrics` | `(pushMs, renderMs, isLazy) => void` | — | Render timing callback; `isLazy` reflects whether the strided scan was active |
 
 `rowHeight` and `heightPx` changes are applied without tearing down the renderer. All other prop changes recreate it.
