@@ -1,5 +1,7 @@
 # waterfall-canvas
 
+![waterfall-canvas demo](https://raw.githubusercontent.com/hony2323/waterfall-canvas/master/assets/demo.gif)
+
 High-performance waterfall / spectrogram canvas renderer with an optional React wrapper.
 
 - Scrolling ring-buffer — no array shifting, constant memory
