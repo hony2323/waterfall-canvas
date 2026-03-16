@@ -48,6 +48,13 @@ export interface WaterfallOptions {
    * When false (default), labels only update when new data arrives — no jumping.
    */
   timeBarDynamic?: boolean
+  /**
+   * Source-pixels-per-output-pixel ratio above which the per-pixel max-value scan
+   * is skipped (center-pixel sampling instead). Kicks in only when significantly
+   * zoomed out, where the scan is expensive and spikes are sub-pixel anyway.
+   * Default: 8. Set to Infinity to always preserve spikes.
+   */
+  lazyThreshold?: number
 }
 
 export interface ExportImageOptions {
@@ -69,7 +76,7 @@ interface BandRange {
 
 export class WaterfallRenderer {
   /** Called from the rAF loop after each render. Assign freely — no re-render side effects. */
-  onMetrics?: (pushMs: number, renderMs: number) => void
+  onMetrics?: (pushMs: number, renderMs: number, isLazy: boolean) => void
   /** Pixel height of each time-slice row. Higher = faster-looking waterfall. Default: 1 */
   rowHeight = 1
 
@@ -81,6 +88,7 @@ export class WaterfallRenderer {
   private readonly timeBarEnabled: boolean
   private readonly timeBarDynamic: boolean
   private readonly minSpan: number
+  private readonly lazyThreshold: number
   private readonly freqFormat: (hz: number) => string
   private readonly valueFormat: (t: number) => string
 
@@ -129,6 +137,7 @@ export class WaterfallRenderer {
     this.timeBarEnabled = options.timeBar        ?? false
     this.timeBarDynamic = options.timeBarDynamic ?? false
     this.minSpan        = options.minSpan        ?? 32
+    this.lazyThreshold  = options.lazyThreshold  ?? 8
     this.freqFormat     = options.freqFormat     ?? (hz => hz.toFixed(1))
     this.valueFormat    = options.valueFormat    ?? (t  => (t * 100).toFixed(1) + '%')
 
@@ -392,11 +401,29 @@ export class WaterfallRenderer {
         const x0 = vs + ((x       * span / w) | 0)
         const x1 = Math.min(ringW, vs + (((x + 1) * span / w) | 0))
         let srcX = vs + (((x + 0.5) * span / w) | 0)
-        if (vRow >= 0 && x1 > x0 + 1) {
+        if (vRow >= 0 && x1 > x0 + 1 && x1 - x0 <= this.lazyThreshold) {
+          // Precise: max-value scan — preserves every spike
           let bestVal = -1
           for (let sx = x0; sx < x1; sx++) {
             const v = this.valueBuffer![vRow + sx]
             if (v > bestVal) { bestVal = v; srcX = sx }
+          }
+        } else if (x1 > x0 + 1) {
+          // Lazy: max over strided grid points only (multiples of lazyThreshold).
+          // Grid positions are absolute in the buffer — zoom-invariant — so the
+          // same source frequencies are always candidates regardless of zoom level.
+          const stride    = this.lazyThreshold
+          const firstGrid = Math.ceil(x0 / stride) * stride
+          if (firstGrid < x1) {
+            if (vRow >= 0) {
+              let bestVal = -1
+              for (let sx = firstGrid; sx < x1; sx += stride) {
+                const v = this.valueBuffer![vRow + sx]
+                if (v > bestVal) { bestVal = v; srcX = sx }
+              }
+            } else {
+              srcX = firstGrid
+            }
           }
         }
         const si = (srcRow + srcX) * 4
@@ -464,7 +491,9 @@ export class WaterfallRenderer {
       const renderMs = performance.now() - t0
 
       if (this.pendingPushMs >= 0) {
-        this.onMetrics?.(this.pendingPushMs, renderMs)
+        const span   = this.viewEnd - this.viewStart
+        const isLazy = !!this.valueBuffer && span / (canvas.width || 1) > this.lazyThreshold
+        this.onMetrics?.(this.pendingPushMs, renderMs, isLazy)
         this.pendingPushMs = -1
       }
 

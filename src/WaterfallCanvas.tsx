@@ -18,11 +18,12 @@ export interface WaterfallCanvasProps {
   timeBarDynamic?: boolean
   freqFormat?: (hz: number) => string
   valueFormat?: (t: number) => string
-  onMetrics?: (pushMs: number, renderMs: number) => void
+  lazyThreshold?: number
+  onMetrics?: (pushMs: number, renderMs: number, isLazy: boolean) => void
 }
 
 export const WaterfallCanvas = forwardRef<WaterfallCanvasHandle, WaterfallCanvasProps>(
-  function WaterfallCanvas({ rowCount = 400, heightPx = 400, rowHeight = 1, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat, onMetrics }, ref) {
+  function WaterfallCanvas({ rowCount = 400, heightPx = 400, rowHeight = 1, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat, lazyThreshold, onMetrics }, ref) {
     const canvasRef    = useRef<HTMLCanvasElement>(null)
     const rendererRef  = useRef<WaterfallRenderer | null>(null)
     const onMetricsRef = useRef(onMetrics)
@@ -33,11 +34,11 @@ export const WaterfallCanvas = forwardRef<WaterfallCanvasHandle, WaterfallCanvas
     }), [])
 
     useEffect(() => {
-      const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat })
+      const renderer = new WaterfallRenderer(canvasRef.current!, { rowCount, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat, lazyThreshold })
       renderer.onMetrics = (...args) => onMetricsRef.current?.(...args)
       rendererRef.current = renderer
       return () => { renderer.destroy(); rendererRef.current = null }
-    }, [rowCount, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat])
+    }, [rowCount, bufferWidth, minSpan, colorMap, tooltip, timeBar, timeBarDynamic, freqFormat, valueFormat, lazyThreshold])
 
     useEffect(() => {
       if (rendererRef.current) rendererRef.current.rowHeight = rowHeight
