@@ -388,3 +388,166 @@ describe('WaterfallRenderer — rowHeight', () => {
     renderer.destroy()
   })
 })
+
+// ── ring cursor / row ordering ────────────────────────────────────────────────
+//
+// rowCount=4 so wraparound happens after 4 pushes.
+// After 6 pushes the physical layout is:
+//   row 0 → push 4 (value=40)   row 2 → push 6 (value=60) ← headRow
+//   row 1 → push 3 (value=30)   row 3 → push 5 (value=50)
+
+describe('WaterfallRenderer — ring cursor / row ordering', () => {
+  const ROW_COUNT = 4
+
+  it('headRow advances backward and wraps correctly', () => {
+    const renderer = new WaterfallRenderer(makeCanvas(), { rowCount: ROW_COUNT, bufferWidth: 0 })
+    renderer.push(makeFrame(1))  // 0 → 3
+    expect(priv(renderer).headRow).toBe(3)
+    renderer.push(makeFrame(1))  // 3 → 2
+    expect(priv(renderer).headRow).toBe(2)
+    renderer.push(makeFrame(1))  // 2 → 1
+    renderer.push(makeFrame(1))  // 1 → 0  (full cycle)
+    renderer.push(makeFrame(1))  // 0 → 3  (wraparound)
+    expect(priv(renderer).headRow).toBe(3)
+    renderer.destroy()
+  })
+
+  it('physical row at headRow holds the most recent push pixel', () => {
+    const renderer = new WaterfallRenderer(makeCanvas(), { rowCount: ROW_COUNT, bufferWidth: 0 })
+    for (let i = 1; i <= 6; i++) renderer.push(makeFrame(1, i * 10))
+
+    const p       = priv(renderer)
+    const img     = p.imgData as ImageData
+    const head    = p.headRow as number
+    const ringW   = p.ringWidth as number
+
+    // value=60 → t=0.6 → LUT index=round(0.6×255)=153
+    expect(img.data[head * ringW * 4]).toBe(Math.round(0.6 * 255))
+    // second-newest (value=50 → 128) sits at next physical row
+    expect(img.data[((head + 1) % ROW_COUNT) * ringW * 4]).toBe(Math.round(0.5 * 255))
+
+    renderer.destroy()
+  })
+
+  it('getOrdered (export) maps logical rows to correct physical rows after wraparound', () => {
+    const renderer = new WaterfallRenderer(makeCanvas(), { rowCount: ROW_COUNT, bufferWidth: 0 })
+    for (let i = 1; i <= 6; i++) renderer.push(makeFrame(1, i * 10))
+
+    const p     = priv(renderer)
+    const img   = p.imgData as ImageData
+    const head  = p.headRow as number
+    const ringW = p.ringWidth as number
+    const rc    = ROW_COUNT
+
+    // Replicate the getOrdered() logic used by exportImage
+    const ordered = new Uint8ClampedArray(ringW * rc * 4)
+    for (let y = 0; y < rc; y++) {
+      const physRow = (head + y) % rc
+      ordered.set(img.data.subarray(physRow * ringW * 4, (physRow + 1) * ringW * 4), y * ringW * 4)
+    }
+
+    // Logical row 0 = newest (push 6, value=60 → 153)
+    expect(ordered[0 * ringW * 4]).toBe(Math.round(0.6 * 255))
+    // Logical row 1 = push 5 (value=50 → 128)
+    expect(ordered[1 * ringW * 4]).toBe(Math.round(0.5 * 255))
+    // Logical row 2 = push 4 (value=40 → 102)
+    expect(ordered[2 * ringW * 4]).toBe(Math.round(0.4 * 255))
+    // Logical row 3 = oldest surviving (push 3, value=30 → 77)
+    expect(ordered[3 * ringW * 4]).toBe(Math.round(0.3 * 255))
+
+    renderer.destroy()
+  })
+})
+
+// ── valueBuffer / timeBuffer after wraparound ─────────────────────────────────
+
+describe('WaterfallRenderer — buffers after wraparound', () => {
+  const ROW_COUNT = 4
+
+  it('valueBuffer at headRow×ringWidth holds the most recent normalized value', () => {
+    const renderer = new WaterfallRenderer(makeCanvas(), { rowCount: ROW_COUNT, bufferWidth: 0, tooltip: true })
+    for (let i = 1; i <= 6; i++) renderer.push(makeFrame(1, i * 10))
+
+    const p    = priv(renderer)
+    const vb   = p.valueBuffer as Float32Array
+    const head = p.headRow as number
+    const ringW = p.ringWidth as number
+
+    expect(vb[head * ringW]).toBeCloseTo(0.6, 3)                              // push 6
+    expect(vb[((head + 1) % ROW_COUNT) * ringW]).toBeCloseTo(0.5, 3)         // push 5
+
+    renderer.destroy()
+  })
+
+  it('timeBuffer at headRow holds the most recent sent_at after wraparound', () => {
+    const renderer = new WaterfallRenderer(makeCanvas(), { rowCount: ROW_COUNT, bufferWidth: 0, timeBar: true })
+    for (let i = 1; i <= 6; i++) {
+      const frame = makeFrame(1)
+      frame.header[0].sent_at = i * 1000
+      renderer.push(frame)
+    }
+
+    const p    = priv(renderer)
+    const tb   = p.timeBuffer as Float64Array
+    const head = p.headRow as number
+
+    expect(tb[head]).toBe(6000)                          // most recent
+    expect(tb[(head + 1) % ROW_COUNT]).toBe(5000)        // second most recent
+
+    renderer.destroy()
+  })
+})
+
+// ── isLazy boundary ───────────────────────────────────────────────────────────
+
+describe('WaterfallRenderer — isLazy boundary', () => {
+  // Force _loop to run synchronously so onMetrics is called immediately.
+  function runLoop(r: WaterfallRenderer) {
+    (r as unknown as { _loop(): void })._loop()
+  }
+
+  it('reports isLazy=false when span/canvasWidth <= lazyThreshold', () => {
+    const canvas = makeCanvas(100)
+    const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: true, lazyThreshold: 4 })
+    const metrics = vi.fn()
+    renderer.onMetrics = metrics
+    renderer.push(makeFrame(200))   // span=200, ratio=2 ≤ 4
+    runLoop(renderer)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), false)
+    renderer.destroy()
+  })
+
+  it('reports isLazy=true when span/canvasWidth > lazyThreshold', () => {
+    const canvas = makeCanvas(100)
+    const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: true, lazyThreshold: 4 })
+    const metrics = vi.fn()
+    renderer.onMetrics = metrics
+    renderer.push(makeFrame(1000))  // span=1000, ratio=10 > 4
+    runLoop(renderer)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), true)
+    renderer.destroy()
+  })
+
+  it('reports isLazy=false when tooltip is disabled regardless of zoom', () => {
+    const canvas = makeCanvas(100)
+    const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: false, lazyThreshold: 4 })
+    const metrics = vi.fn()
+    renderer.onMetrics = metrics
+    renderer.push(makeFrame(1000))  // ratio=10 > 4 but no valueBuffer
+    runLoop(renderer)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), false)
+    renderer.destroy()
+  })
+
+  it('isLazy flips at the exact threshold boundary', () => {
+    // span == canvasWidth * lazyThreshold is NOT lazy (strictly greater required)
+    const canvas = makeCanvas(100)
+    const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: true, lazyThreshold: 4 })
+    const metrics = vi.fn()
+    renderer.onMetrics = metrics
+    renderer.push(makeFrame(400))   // span=400, ratio=4 — exactly at threshold, not lazy
+    runLoop(renderer)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), false)
+    renderer.destroy()
+  })
+})
