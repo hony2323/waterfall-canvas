@@ -2,8 +2,7 @@ name: Publish
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [master]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -12,29 +11,30 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write   # required for npm provenance
-
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
+          registry-url: https://registry.npmjs.org
 
       - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
 
-      # Guard: only publish if the tag sits on the main/master branch
-      - name: Verify tag is on main
+      - name: Bump patch version
         run: |
-          git fetch origin main || git fetch origin master
-          git merge-base --is-ancestor HEAD origin/main 2>/dev/null || \
-          git merge-base --is-ancestor HEAD origin/master 2>/dev/null || \
-          (echo "❌ Tag must be on main/master branch" && exit 1)
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch --no-git-tag-version
+          git add package.json
+          git commit -m "chore: bump version to $(node -p "require('./package.json').version") [skip ci]"
+          git push
 
-      # prepublishOnly runs build + tests automatically
-      - run: npm publish --provenance --access public  # --access public required for scoped packages
+      - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

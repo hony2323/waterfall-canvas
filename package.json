@@ -10,6 +10,10 @@
   },
   "type": "module",
   "files": ["dist", "LICENSE"],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "restricted"
+  },
   "sideEffects": false,
   "exports": {
     ".": {
