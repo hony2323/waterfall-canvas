@@ -162,7 +162,7 @@ ws.onmessage = ({ data }) => {
 | `tooltip` | `boolean` | `false` | Show hover tooltip with band / freq / value / time |
 | `timeBar` | `boolean` | `false` | Show time-ago labels on the left edge |
 | `timeBarDynamic` | `boolean` | `false` | When `true`, time-ago updates every rAF tick; when `false`, only on new data |
-| `lazyThreshold` | `number` | `8` | Source-pixels-per-output-pixel ratio above which the max-value scan is replaced by a strided scan over fixed grid positions. Keeps spike visibility consistent across zoom levels while limiting render cost. Set to `Infinity` to always use full scan |
+| `lazyThreshold` | `number` | `4` | Source-pixels-per-output-pixel ratio above which the max-value scan is replaced by a strided scan over fixed grid positions. Keeps spike visibility consistent across zoom levels while limiting render cost. Set to `Infinity` to always use full scan |
 | `freqFormat` | `(hz: number) => string` | `hz.toFixed(1)` | Formats the frequency in the tooltip |
 | `valueFormat` | `(t: number) => string` | `(t*100).toFixed(1)+'%'` | Formats the signal value (`t` is normalized 0–1) |
 

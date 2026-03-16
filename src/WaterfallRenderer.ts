@@ -52,7 +52,7 @@ export interface WaterfallOptions {
    * Source-pixels-per-output-pixel ratio above which the per-pixel max-value scan
    * is skipped (center-pixel sampling instead). Kicks in only when significantly
    * zoomed out, where the scan is expensive and spikes are sub-pixel anyway.
-   * Default: 8. Set to Infinity to always preserve spikes.
+   * Default: 4. Set to Infinity to always preserve spikes.
    */
   lazyThreshold?: number
 }
@@ -137,7 +137,7 @@ export class WaterfallRenderer {
     this.timeBarEnabled = options.timeBar        ?? false
     this.timeBarDynamic = options.timeBarDynamic ?? false
     this.minSpan        = options.minSpan        ?? 32
-    this.lazyThreshold  = options.lazyThreshold  ?? 8
+    this.lazyThreshold  = options.lazyThreshold  ?? 4
     this.freqFormat     = options.freqFormat     ?? (hz => hz.toFixed(1))
     this.valueFormat    = options.valueFormat    ?? (t  => (t * 100).toFixed(1) + '%')
 
