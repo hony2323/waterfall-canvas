@@ -11,8 +11,8 @@
   "type": "module",
   "files": ["dist", "LICENSE"],
   "publishConfig": {
-    "registry": "https://registry.npmjs.org",
-    "access": "public"
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   },
   "sideEffects": false,
   "exports": {
