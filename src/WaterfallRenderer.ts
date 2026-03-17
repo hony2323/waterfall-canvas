@@ -55,6 +55,20 @@ export interface WaterfallOptions {
    * Default: 4. Set to Infinity to always preserve spikes.
    */
   lazyThreshold?: number
+  /**
+   * Direction the waterfall scrolls:
+   * - `'top'` (default): newest row at top, time scrolls downward, frequency on x-axis
+   * - `'bottom'`: newest row at bottom, time scrolls upward, frequency on x-axis
+   * - `'left'`: newest column at left, time scrolls rightward, frequency on y-axis
+   * - `'right'`: newest column at right, time scrolls leftward, frequency on y-axis
+   */
+  direction?: 'top' | 'bottom' | 'left' | 'right'
+  /**
+   * Flip the frequency axis. For horizontal directions this reverses the y-axis
+   * (low frequencies at the bottom); for vertical directions it reverses the x-axis
+   * (low frequencies on the right). Default: false.
+   */
+  flipFreq?: boolean
 }
 
 export interface ExportImageOptions {
@@ -91,6 +105,11 @@ export class WaterfallRenderer {
   private readonly lazyThreshold: number
   private readonly freqFormat: (hz: number) => string
   private readonly valueFormat: (t: number) => string
+  private readonly direction: 'top' | 'bottom' | 'left' | 'right'
+  private readonly isHorizontal: boolean
+  private readonly flipFreq: boolean
+  // Resolved flip: horizontal defaults to flipped (low freq at bottom), vertical defaults to unflipped (low freq at left)
+  private readonly flipFreqActual: boolean
 
   private timeBarNow = 0  // snapshot of Date.now() taken at each push
 
@@ -118,7 +137,7 @@ export class WaterfallRenderer {
   private pendingPushMs = -1
 
   private dragActive = false
-  private lastDragX = 0
+  private lastDragPos = 0
   private lastMouseEvent: MouseEvent | null = null
 
   private readonly ro: ResizeObserver
@@ -140,6 +159,11 @@ export class WaterfallRenderer {
     this.lazyThreshold  = options.lazyThreshold  ?? 4
     this.freqFormat     = options.freqFormat     ?? (hz => hz.toFixed(1))
     this.valueFormat    = options.valueFormat    ?? (t  => (t * 100).toFixed(1) + '%')
+    this.direction      = options.direction      ?? 'top'
+    this.isHorizontal   = this.direction === 'left' || this.direction === 'right'
+    this.flipFreq       = options.flipFreq       ?? false
+    // Horizontal: flip by default so low freq is at bottom. Vertical: no flip by default (low freq at left).
+    this.flipFreqActual = this.isHorizontal ? !this.flipFreq : this.flipFreq
 
     if (this.tooltipEnabled) {
       const el = document.createElement('div')
@@ -160,13 +184,11 @@ export class WaterfallRenderer {
     this._boundMouseUp   = this._onMouseUp.bind(this)
 
     this.ro = new ResizeObserver(() => {
-      canvas.width  = canvas.offsetWidth
-      canvas.height = this.rowCount
+      this._resizeCanvas()
       this.viewDirty = true
     })
     this.ro.observe(canvas)
-    canvas.width  = canvas.offsetWidth || 800
-    canvas.height = this.rowCount
+    this._resizeCanvas()
     canvas.style.cursor = 'grab'
 
     canvas.addEventListener('wheel',      this._boundWheel,     { passive: false })
@@ -257,6 +279,17 @@ export class WaterfallRenderer {
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
+
+  private _resizeCanvas(): void {
+    const canvas = this.canvas
+    if (this.isHorizontal) {
+      canvas.width  = this.rowCount
+      canvas.height = canvas.offsetHeight || 400
+    } else {
+      canvas.width  = canvas.offsetWidth || 800
+      canvas.height = this.rowCount
+    }
+  }
 
   private _bandSampleCount(band: BandHeader): number {
     if (band.precision === 'float32') return band.length / 4
@@ -376,6 +409,7 @@ export class WaterfallRenderer {
     this.dirty = true
   }
 
+  /** Render for 'top' and 'bottom' directions (frequency on x-axis, time on y-axis). */
   private _renderViewport(): void {
     const src   = this.imgData?.data
     const vData = this.viewImg
@@ -387,19 +421,21 @@ export class WaterfallRenderer {
     const span  = (this.viewEnd | 0) - vs
     if (span <= 0) return
 
-    const dst  = vData.data
-    const w    = vData.width
-    const head = this.headRow
+    const dst    = vData.data
+    const w      = vData.width
+    const head   = this.headRow
+    const flipY  = this.direction === 'bottom'
 
     for (let y = 0; y < rc; y++) {
       const physRow = (head + y) % rc
       const srcRow  = physRow * ringW
-      const dstRow  = y * w
+      const dstRow  = (flipY ? rc - 1 - y : y) * w
       const vRow    = this.valueBuffer ? physRow * ringW : -1
       for (let x = 0; x < w; x++) {
-        const x0 = vs + ((x       * span / w) | 0)
-        const x1 = Math.min(ringW, vs + (((x + 1) * span / w) | 0))
-        let srcX = vs + (((x + 0.5) * span / w) | 0)
+        const xf = this.flipFreqActual ? w - 1 - x : x
+        const x0 = vs + ((xf       * span / w) | 0)
+        const x1 = Math.min(ringW, vs + (((xf + 1) * span / w) | 0))
+        let srcX = vs + (((xf + 0.5) * span / w) | 0)
         if (vRow >= 0 && x1 > x0 + 1 && x1 - x0 <= this.lazyThreshold) {
           // Precise: max-value scan — preserves every spike
           let bestVal = -1
@@ -423,6 +459,65 @@ export class WaterfallRenderer {
         }
         const si = (srcRow + srcX) * 4
         const di = (dstRow + x) * 4
+        dst[di]   = src[si]
+        dst[di+1] = src[si+1]
+        dst[di+2] = src[si+2]
+        dst[di+3] = src[si+3]
+      }
+    }
+  }
+
+  /** Render for 'left' and 'right' directions (frequency on y-axis, time on x-axis). */
+  private _renderViewportHorizontal(): void {
+    const src   = this.imgData?.data
+    const vData = this.viewImg
+    if (!src || !vData) return
+
+    const ringW   = this.ringWidth
+    const rc      = this.rowCount
+    const vs      = this.viewStart | 0
+    const span    = (this.viewEnd | 0) - vs
+    if (span <= 0) return
+
+    const dst     = vData.data
+    const canvasH = vData.height   // frequency axis (y)
+    const head    = this.headRow
+    const flipX   = this.direction === 'right'
+
+    for (let x = 0; x < rc; x++) {
+      // Map canvas column to logical row (time slot)
+      const lr      = flipX ? rc - 1 - x : x
+      const physRow = (head + lr) % rc
+      const srcRow  = physRow * ringW
+      const vRow    = this.valueBuffer ? physRow * ringW : -1
+
+      for (let y = 0; y < canvasH; y++) {
+        const yf = this.flipFreqActual ? canvasH - 1 - y : y
+        // Map canvas row to frequency bin via zoom
+        const y0 = vs + ((yf       * span / canvasH) | 0)
+        const y1 = Math.min(ringW, vs + (((yf + 1) * span / canvasH) | 0))
+        let srcX = vs + (((yf + 0.5) * span / canvasH) | 0)
+
+        if (vRow >= 0 && y1 > y0 + 1 && y1 - y0 <= this.lazyThreshold) {
+          let bestVal = -1
+          for (let sx = y0; sx < y1; sx++) {
+            const v = this.valueBuffer![vRow + sx]
+            if (v > bestVal) { bestVal = v; srcX = sx }
+          }
+        } else if (vRow >= 0 && y1 > y0 + 1) {
+          const stride    = this.lazyThreshold
+          const firstGrid = Math.ceil(y0 / stride) * stride
+          if (firstGrid < y1) {
+            let bestVal = -1
+            for (let sx = firstGrid; sx < y1; sx += stride) {
+              const v = this.valueBuffer![vRow + sx]
+              if (v > bestVal) { bestVal = v; srcX = sx }
+            }
+          }
+        }
+
+        const si = (srcRow + srcX) * 4
+        const di = (y * rc + x) * 4   // viewImg row=y, col=x (width=rowCount)
         dst[di]   = src[si]
         dst[di+1] = src[si+1]
         dst[di+2] = src[si+2]
@@ -474,20 +569,25 @@ export class WaterfallRenderer {
     const canvas = this.canvas
     const ctx    = this.ctx
 
-    if (canvas.width > 0 && ctx && (this.dirty || this.viewDirty)) {
-      if (!this.viewImg || this.viewImg.width !== canvas.width) {
-        this.viewImg = new ImageData(canvas.width, this.rowCount)
+    if (canvas.width > 0 && canvas.height > 0 && ctx && (this.dirty || this.viewDirty)) {
+      if (!this.viewImg || this.viewImg.width !== canvas.width || this.viewImg.height !== canvas.height) {
+        this.viewImg = new ImageData(canvas.width, canvas.height)
       }
 
       const t0 = performance.now()
-      this._renderViewport()
+      if (this.isHorizontal) {
+        this._renderViewportHorizontal()
+      } else {
+        this._renderViewport()
+      }
       ctx.putImageData(this.viewImg!, 0, 0)
-      if (this.timeBarEnabled) this._drawTimeBar()
+      if (this.timeBarEnabled && !this.isHorizontal) this._drawTimeBar()
       const renderMs = performance.now() - t0
 
       if (this.pendingPushMs >= 0) {
         const span   = this.viewEnd - this.viewStart
-        const isLazy = !!this.valueBuffer && span / (canvas.width || 1) > this.lazyThreshold
+        const dimPx  = this.isHorizontal ? (canvas.height || 1) : (canvas.width || 1)
+        const isLazy = !!this.valueBuffer && span / dimPx > this.lazyThreshold
         this.onMetrics?.(this.pendingPushMs, renderMs, isLazy)
         this.pendingPushMs = -1
       }
@@ -511,15 +611,38 @@ export class WaterfallRenderer {
     const vs    = this.viewStart | 0
     const span  = (this.viewEnd | 0) - vs
 
-    const rect       = this.canvas.getBoundingClientRect()
-    const canvasFrac = (e.clientX - rect.left) / rect.width
-    const rowFrac    = (e.clientY - rect.top)  / rect.height
+    const rect = this.canvas.getBoundingClientRect()
 
-    const rx      = Math.min(ringW - 1, Math.max(0, vs + (((canvasFrac + 0.5 / rect.width) * span) | 0)))
-    const logicRy = Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
-    const physRy  = (this.headRow + logicRy) % this.rowCount
+    let rx: number
+    let physRy: number
 
-    const ringXf = vs + canvasFrac * span
+    if (this.isHorizontal) {
+      // x = time axis, y = frequency axis
+      const timeFrac    = (e.clientX - rect.left) / rect.width
+      const freqFracRaw = (e.clientY - rect.top)  / rect.height
+      const freqFrac    = this.flipFreqActual ? 1 - freqFracRaw : freqFracRaw
+      rx = Math.min(ringW - 1, Math.max(0, vs + (((freqFrac + 0.5 / rect.height) * span) | 0)))
+      const lr = (this.direction === 'right')
+        ? Math.min(this.rowCount - 1, Math.max(0, ((1 - timeFrac) * this.rowCount) | 0))
+        : Math.min(this.rowCount - 1, Math.max(0, (timeFrac * this.rowCount) | 0))
+      physRy = (this.headRow + lr) % this.rowCount
+    } else {
+      // x = frequency axis, y = time axis
+      const canvasFrac = (e.clientX - rect.left) / rect.width
+      const rowFrac    = (e.clientY - rect.top)  / rect.height
+      rx = Math.min(ringW - 1, Math.max(0, vs + (((canvasFrac + 0.5 / rect.width) * span) | 0)))
+      const logicRy = (this.direction === 'bottom')
+        ? Math.min(this.rowCount - 1, Math.max(0, ((1 - rowFrac) * this.rowCount) | 0))
+        : Math.min(this.rowCount - 1, Math.max(0, (rowFrac * this.rowCount) | 0))
+      physRy = (this.headRow + logicRy) % this.rowCount
+    }
+
+    // Frequency fraction for band detection
+    const freqFracForBandRaw = this.isHorizontal
+      ? (e.clientY - rect.top)  / rect.height
+      : (e.clientX - rect.left) / rect.width
+    const freqFracForBand = this.flipFreqActual ? 1 - freqFracForBandRaw : freqFracForBandRaw
+    const ringXf = vs + freqFracForBand * span
     const srcXf  = ringW === this.totalSamples
       ? ringXf
       : ringXf * (this.totalSamples / ringW)
@@ -606,7 +729,9 @@ export class WaterfallRenderer {
     const span         = this.viewEnd - this.viewStart
     const factor       = e.deltaY > 0 ? 1.15 : 0.85
     const newSpan      = Math.max(this.minSpan, Math.min(ringW, span * factor))
-    const cursorFrac   = e.offsetX / this.canvas.clientWidth
+    const cursorFrac = this.isHorizontal
+      ? (this.flipFreqActual ? 1 - e.offsetY / this.canvas.clientHeight : e.offsetY / this.canvas.clientHeight)
+      : (this.flipFreqActual ? 1 - e.offsetX / this.canvas.clientWidth  : e.offsetX / this.canvas.clientWidth)
     const cursorSample = this.viewStart + cursorFrac * span
 
     let newStart = cursorSample - cursorFrac * newSpan
@@ -621,7 +746,7 @@ export class WaterfallRenderer {
 
   private _onMouseDown(e: MouseEvent): void {
     this.dragActive          = true
-    this.lastDragX           = e.clientX
+    this.lastDragPos         = this.isHorizontal ? e.clientY : e.clientX
     this.lastMouseEvent      = null
     this.canvas.style.cursor = 'grabbing'
     if (this.tooltipEl) this.tooltipEl.style.display = 'none'
@@ -631,9 +756,11 @@ export class WaterfallRenderer {
     if (this.dragActive) {
       const ringW = this.ringWidth
       if (!ringW) return
-      const span = this.viewEnd - this.viewStart
-      const dx   = ((e.clientX - this.lastDragX) / this.canvas.clientWidth) * span
-      this.lastDragX = e.clientX
+      const span      = this.viewEnd - this.viewStart
+      const clientPos = this.isHorizontal ? e.clientY : e.clientX
+      const clientSz  = this.isHorizontal ? this.canvas.clientHeight : this.canvas.clientWidth
+      const dx        = ((clientPos - this.lastDragPos) / clientSz) * span
+      this.lastDragPos = clientPos
 
       let newStart = this.viewStart - dx
       let newEnd   = this.viewEnd   - dx
