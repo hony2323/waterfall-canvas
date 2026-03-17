@@ -287,10 +287,16 @@ ws.onmessage = ({ data }) => {
 | `bufferWidth` | `number` | `4096` | Max ring buffer width in pixels. `0` = full input resolution |
 | `minSpan` | `number` | `32` | Minimum visible pixels (= maximum zoom) |
 | `colorMap` | `(t: number) => [r,g,b]` | grayscale | Colormap function. A 256-entry LUT is pre-computed at init |
+| `direction` | `'top' \| 'bottom' \| 'left' \| 'right'` | `'top'` | Scroll direction. `'top'`/`'bottom'`: newest row at top/bottom, frequency on x-axis. `'left'`/`'right'`: newest column at left/right, frequency on y-axis |
+| `flipFreq` | `boolean` | `false` | Flip the frequency axis. For horizontal directions: low frequencies at top (default is bottom). For vertical directions: low frequencies on the right |
 | `tooltip` | `boolean` | `false` | Show hover tooltip with band / freq / value / time |
 | `timeBar` | `boolean` | `false` | Show time-ago labels on the left edge |
 | `timeBarDynamic` | `boolean` | `false` | When `true`, time-ago updates every rAF tick; when `false`, only on new data |
 | `lazyThreshold` | `number` | `4` | Source-pixels-per-output-pixel ratio above which rendering becomes **approximate**: the full per-pixel max-value scan is replaced by a strided scan over fixed grid positions (multiples of `lazyThreshold`). This is intentional — at extreme zoom-out the scan dominates render time, and sub-pixel spikes are not visible anyway. Grid positions are zoom-invariant, so spike visibility is consistent as you zoom. Set to `Infinity` to always use the full scan |
+| `smoothPixels` | `boolean` | `false` | Bilinear interpolation when mapping source pixels to output pixels. Produces smooth gradients at the cost of spike preservation (max-value pooling is bypassed) |
+| `smoothZoom` | `boolean` | `false` | Animate zoom transitions. Wheel events smoothly lerp to the target zoom level each rAF tick instead of snapping instantly |
+| `sensitivity` | `{ low: number; high: number }` | `{ low: 0, high: 1 }` | Linear window applied after wire normalization. Values below `low` map to 0; values above `high` map to 1. Narrowing the window amplifies faint signals |
+| `gamma` | `number` | `1` | Power-curve applied after sensitivity. `< 1` pulls faint signals up (brighter); `> 1` pushes them down (darker) |
 | `freqFormat` | `(hz: number) => string` | `hz.toFixed(1)` | Formats the frequency in the tooltip |
 | `valueFormat` | `(t: number) => string` | `(t*100).toFixed(1)+'%'` | Formats the signal value (`t` is normalized 0–1) |
 
@@ -301,6 +307,8 @@ ws.onmessage = ({ data }) => {
 | `push(frame: ParsedFrame)` | Add a new row. Initializes the renderer on the first call |
 | `exportImage(options?)` | Download the full ring buffer as an image file. See `ExportImageOptions` below |
 | `rowHeight: number` | Pixel height of each time-slice row. Can be set at any time |
+| `sensitivity: { low: number; high: number }` | Setting this immediately recolors the entire visible history on the next rAF tick |
+| `gamma: number` | Setting this immediately recolors the entire visible history on the next rAF tick |
 | `onMetrics?: (pushMs, renderMs, isLazy) => void` | Called after each render. `isLazy` is `true` when the strided scan was used instead of the full max-value scan |
 | `destroy()` | Cancel rAF, remove event listeners, free buffers |
 
@@ -329,10 +337,16 @@ All `WaterfallOptions` fields are available as props, plus:
 | `ref` | `WaterfallCanvasHandle` | — | Exposes `push(frame)` and `exportImage(options?)` imperatively |
 | `heightPx` | `number` | `400` | CSS height of the canvas element |
 | `rowHeight` | `number` | `1` | Passed to renderer; updates without recreating |
-| `lazyThreshold` | `number` | `4` | See `WaterfallOptions` above |
+| `sensitivity` | `{ low: number; high: number }` | `{ low: 0, high: 1 }` | Updates live — recolors entire history on the next rAF tick |
+| `gamma` | `number` | `1` | Updates live — recolors entire history on the next rAF tick |
+| `direction` | `'top' \| 'bottom' \| 'left' \| 'right'` | `'top'` | See `WaterfallOptions` above; recreates renderer on change |
+| `flipFreq` | `boolean` | `false` | See `WaterfallOptions` above; recreates renderer on change |
+| `smoothPixels` | `boolean` | `false` | See `WaterfallOptions` above; recreates renderer on change |
+| `smoothZoom` | `boolean` | `false` | See `WaterfallOptions` above; recreates renderer on change |
+| `lazyThreshold` | `number` | `4` | See `WaterfallOptions` above; recreates renderer on change |
 | `onMetrics` | `(pushMs, renderMs, isLazy) => void` | — | Render timing callback; `isLazy` reflects whether the strided scan was active |
 
-`rowHeight` and `heightPx` changes are applied without tearing down the renderer. All other prop changes recreate it.
+`rowHeight`, `sensitivity`, and `gamma` update the live renderer without recreating it. All other prop changes recreate the renderer.
 
 ---
 
