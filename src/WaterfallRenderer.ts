@@ -69,6 +69,30 @@ export interface WaterfallOptions {
    * (low frequencies on the right). Default: false.
    */
   flipFreq?: boolean
+  /**
+   * Bilinear interpolation when mapping source pixels to output pixels.
+   * Produces smooth gradients at the cost of spike preservation (max-value
+   * pooling is bypassed). Default: false (nearest / max-value).
+   */
+  smoothPixels?: boolean
+  /**
+   * Animate zoom transitions. When true, wheel events smoothly lerp the view
+   * to the target zoom level each rAF tick instead of snapping instantly.
+   * Default: false.
+   */
+  smoothZoom?: boolean
+  /**
+   * Linear window applied after wire normalization.
+   * Values below `low` map to 0; values above `high` map to 1.
+   * Narrowing the window amplifies faint signals. Default: { low: 0, high: 1 } (no-op).
+   */
+  sensitivity?: { low: number; high: number }
+  /**
+   * Gamma / power-curve applied after sensitivity.
+   * < 1 pulls faint signals up (brighter); > 1 pushes them down (darker).
+   * Default: 1 (no-op).
+   */
+  gamma?: number
 }
 
 export interface ExportImageOptions {
@@ -94,6 +118,14 @@ export class WaterfallRenderer {
   /** Pixel height of each time-slice row. Higher = faster-looking waterfall. Default: 1 */
   rowHeight = 1
 
+  private _sensitivity = { low: 0, high: 1 }
+  private _gamma = 1
+
+  get sensitivity() { return this._sensitivity }
+  set sensitivity(v: { low: number; high: number }) { this._sensitivity = v; this.viewDirty = true }
+  get gamma() { return this._gamma }
+  set gamma(v: number) { this._gamma = v; this.viewDirty = true }
+
   private readonly canvas: HTMLCanvasElement
   private readonly rowCount: number
   private readonly bufferWidth: number
@@ -110,6 +142,10 @@ export class WaterfallRenderer {
   private readonly flipFreq: boolean
   // Resolved flip: horizontal defaults to flipped (low freq at bottom), vertical defaults to unflipped (low freq at left)
   private readonly flipFreqActual: boolean
+  private readonly smoothPixels: boolean
+  private readonly smoothZoom: boolean
+  private targetStart = 0
+  private targetEnd   = 0
 
   private timeBarNow = 0  // snapshot of Date.now() taken at each push
 
@@ -164,6 +200,10 @@ export class WaterfallRenderer {
     this.flipFreq       = options.flipFreq       ?? false
     // Horizontal: flip by default so low freq is at bottom. Vertical: no flip by default (low freq at left).
     this.flipFreqActual = this.isHorizontal ? !this.flipFreq : this.flipFreq
+    this.smoothPixels   = options.smoothPixels   ?? false
+    this.smoothZoom     = options.smoothZoom     ?? false
+    if (options.sensitivity) this._sensitivity    = options.sensitivity
+    if (options.gamma !== undefined) this._gamma  = options.gamma
 
     if (this.tooltipEnabled) {
       const el = document.createElement('div')
@@ -318,17 +358,17 @@ export class WaterfallRenderer {
 
     this.ctx = this.canvas.getContext('2d')!
 
-    if (this.tooltipEnabled) {
-      this.valueBuffer = new Float32Array(this.ringWidth * this.rowCount)
-    }
+    this.valueBuffer = new Float32Array(this.ringWidth * this.rowCount)
     if (this.tooltipEnabled || this.timeBarEnabled) {
       this.timeBuffer = new Float64Array(this.rowCount)
     }
 
-    this.headRow     = 0
-    this.viewStart   = 0
-    this.viewEnd     = this.ringWidth
-    this.initialized = true
+    this.headRow      = 0
+    this.viewStart    = 0
+    this.viewEnd      = this.ringWidth
+    this.targetStart  = 0
+    this.targetEnd    = this.ringWidth
+    this.initialized  = true
     this.dirty       = true
     this.viewDirty   = true
   }
@@ -350,6 +390,11 @@ export class WaterfallRenderer {
     // Write new row at physical position `head`
     let px = head * ringW * 4
 
+    // Cache transform params for the hot loop (still needed for imgData — kept for test compatibility)
+    const sensLow  = this._sensitivity.low
+    const sensSpan = this._sensitivity.high - sensLow || 1
+    const gamma    = this._gamma
+
     if (ringW === total) {
       // Fast path: 1:1, no downsampling
       let vi = head * ringW
@@ -358,9 +403,10 @@ export class WaterfallRenderer {
         if (!samples) continue
         const precision = band.precision
         for (let i = 0; i < samples.length; i++) {
-          const t = normalizeValue(samples[i], precision)
-          if (this.valueBuffer) this.valueBuffer[vi] = t
-          vi++
+          const raw = normalizeValue(samples[i], precision)
+          this.valueBuffer![vi++] = raw  // store raw (pre-sensitivity/gamma) for live re-render
+          let t = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+          if (gamma !== 1) t = Math.pow(t, gamma)
           const idx = Math.min(255, Math.max(0, Math.round(t * 255)))
           buf[px++] = lut[idx * 3]
           buf[px++] = lut[idx * 3 + 1]
@@ -372,14 +418,16 @@ export class WaterfallRenderer {
       // Downsampled path: nearest-neighbour from input → ring buffer
       for (let x = 0; x < ringW; x++) {
         const srcX = (x * total / ringW) | 0
-        let t = 0
+        let raw = 0
         for (const range of this.bandRanges) {
           if (srcX < range.end) {
-            t = normalizeValue(f.bands[range.id]![srcX - range.start], range.precision)
+            raw = normalizeValue(f.bands[range.id]![srcX - range.start], range.precision)
             break
           }
         }
-        if (this.valueBuffer) this.valueBuffer[head * ringW + x] = t
+        this.valueBuffer![head * ringW + x] = raw  // store raw for live re-render
+        let t = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+        if (gamma !== 1) t = Math.pow(t, gamma)
         const idx = Math.min(255, Math.max(0, Math.round(t * 255)))
         buf[px++] = lut[idx * 3]
         buf[px++] = lut[idx * 3 + 1]
@@ -393,9 +441,7 @@ export class WaterfallRenderer {
     for (let row = 1; row < rowH; row++) {
       const physRow = (head + row) % rc
       buf.copyWithin(physRow * ringW * 4, src0, src0 + ringW * 4)
-      if (this.valueBuffer) {
-        this.valueBuffer.copyWithin(physRow * ringW, head * ringW, head * ringW + ringW)
-      }
+      this.valueBuffer!.copyWithin(physRow * ringW, head * ringW, head * ringW + ringW)
     }
 
     if (this.timeBuffer) {
@@ -411,117 +457,164 @@ export class WaterfallRenderer {
 
   /** Render for 'top' and 'bottom' directions (frequency on x-axis, time on y-axis). */
   private _renderViewport(): void {
-    const src   = this.imgData?.data
+    const vb    = this.valueBuffer
     const vData = this.viewImg
-    if (!src || !vData) return
+    if (!vb || !vData) return
 
-    const ringW = this.ringWidth
-    const rc    = this.rowCount
-    const vs    = this.viewStart | 0
-    const span  = (this.viewEnd | 0) - vs
+    const ringW    = this.ringWidth
+    const rc       = this.rowCount
+    const vs       = this.viewStart | 0
+    const span     = (this.viewEnd | 0) - vs
     if (span <= 0) return
 
-    const dst    = vData.data
-    const w      = vData.width
-    const head   = this.headRow
-    const flipY  = this.direction === 'bottom'
+    const dst      = vData.data
+    const w        = vData.width
+    const head     = this.headRow
+    const flipY    = this.direction === 'bottom'
+    const lut      = this.lut
+    const sensLow  = this._sensitivity.low
+    const sensSpan = this._sensitivity.high - sensLow || 1
+    const gam      = this._gamma
 
     for (let y = 0; y < rc; y++) {
       const physRow = (head + y) % rc
-      const srcRow  = physRow * ringW
+      const vRow    = physRow * ringW
       const dstRow  = (flipY ? rc - 1 - y : y) * w
-      const vRow    = this.valueBuffer ? physRow * ringW : -1
       for (let x = 0; x < w; x++) {
-        const xf = this.flipFreqActual ? w - 1 - x : x
-        const x0 = vs + ((xf       * span / w) | 0)
-        const x1 = Math.min(ringW, vs + (((xf + 1) * span / w) | 0))
-        let srcX = vs + (((xf + 0.5) * span / w) | 0)
-        if (vRow >= 0 && x1 > x0 + 1 && x1 - x0 <= this.lazyThreshold) {
-          // Precise: max-value scan — preserves every spike
-          let bestVal = -1
-          for (let sx = x0; sx < x1; sx++) {
-            const v = this.valueBuffer![vRow + sx]
-            if (v > bestVal) { bestVal = v; srcX = sx }
-          }
-        } else if (vRow >= 0 && x1 > x0 + 1) {
-          // Lazy: max over strided grid points only (multiples of lazyThreshold).
-          // Grid positions are absolute in the buffer — zoom-invariant — so the
-          // same source frequencies are always candidates regardless of zoom level.
-          const stride    = this.lazyThreshold
-          const firstGrid = Math.ceil(x0 / stride) * stride
-          if (firstGrid < x1) {
+        const xf    = this.flipFreqActual ? w - 1 - x : x
+        const srcXf = vs + (xf + 0.5) * span / w
+        const di    = (dstRow + x) * 4
+        let srcX: number
+        if (this.smoothPixels) {
+          const lo   = Math.max(vs,        Math.floor(srcXf))
+          const hi   = Math.min(ringW - 1, lo + 1)
+          const frac = srcXf - lo
+          const r0   = vb[vRow + lo]
+          const r1   = vb[vRow + hi]
+          srcX = -1  // bilinear — compute color inline
+          const raw  = r0 + (r1 - r0) * frac
+          const t1   = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+          const t2   = gam !== 1 ? Math.pow(t1, gam) : t1
+          const idx  = Math.min(255, Math.max(0, Math.round(t2 * 255)))
+          dst[di]   = lut[idx * 3]
+          dst[di+1] = lut[idx * 3 + 1]
+          dst[di+2] = lut[idx * 3 + 2]
+          dst[di+3] = 255
+          continue
+        } else {
+          const x0 = vs + ((xf       * span / w) | 0)
+          const x1 = Math.min(ringW, vs + (((xf + 1) * span / w) | 0))
+          srcX = srcXf | 0
+          if (x1 > x0 + 1 && x1 - x0 <= this.lazyThreshold) {
+            // Precise: max-value scan — preserves every spike
             let bestVal = -1
-            for (let sx = firstGrid; sx < x1; sx += stride) {
-              const v = this.valueBuffer![vRow + sx]
+            for (let sx = x0; sx < x1; sx++) {
+              const v = vb[vRow + sx]
               if (v > bestVal) { bestVal = v; srcX = sx }
+            }
+          } else if (x1 > x0 + 1) {
+            // Lazy: max over strided grid points only (multiples of lazyThreshold).
+            const stride    = this.lazyThreshold
+            const firstGrid = Math.ceil(x0 / stride) * stride
+            if (firstGrid < x1) {
+              let bestVal = -1
+              for (let sx = firstGrid; sx < x1; sx += stride) {
+                const v = vb[vRow + sx]
+                if (v > bestVal) { bestVal = v; srcX = sx }
+              }
             }
           }
         }
-        const si = (srcRow + srcX) * 4
-        const di = (dstRow + x) * 4
-        dst[di]   = src[si]
-        dst[di+1] = src[si+1]
-        dst[di+2] = src[si+2]
-        dst[di+3] = src[si+3]
+        const raw = vb[vRow + srcX]
+        const t1  = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+        const t2  = gam !== 1 ? Math.pow(t1, gam) : t1
+        const idx = Math.min(255, Math.max(0, Math.round(t2 * 255)))
+        dst[di]   = lut[idx * 3]
+        dst[di+1] = lut[idx * 3 + 1]
+        dst[di+2] = lut[idx * 3 + 2]
+        dst[di+3] = 255
       }
     }
   }
 
   /** Render for 'left' and 'right' directions (frequency on y-axis, time on x-axis). */
   private _renderViewportHorizontal(): void {
-    const src   = this.imgData?.data
+    const vb    = this.valueBuffer
     const vData = this.viewImg
-    if (!src || !vData) return
+    if (!vb || !vData) return
 
-    const ringW   = this.ringWidth
-    const rc      = this.rowCount
-    const vs      = this.viewStart | 0
-    const span    = (this.viewEnd | 0) - vs
+    const ringW    = this.ringWidth
+    const rc       = this.rowCount
+    const vs       = this.viewStart | 0
+    const span     = (this.viewEnd | 0) - vs
     if (span <= 0) return
 
-    const dst     = vData.data
-    const canvasH = vData.height   // frequency axis (y)
-    const head    = this.headRow
-    const flipX   = this.direction === 'right'
+    const dst      = vData.data
+    const canvasH  = vData.height   // frequency axis (y)
+    const head     = this.headRow
+    const flipX    = this.direction === 'right'
+    const lut      = this.lut
+    const sensLow  = this._sensitivity.low
+    const sensSpan = this._sensitivity.high - sensLow || 1
+    const gam      = this._gamma
 
     for (let x = 0; x < rc; x++) {
       // Map canvas column to logical row (time slot)
       const lr      = flipX ? rc - 1 - x : x
       const physRow = (head + lr) % rc
-      const srcRow  = physRow * ringW
-      const vRow    = this.valueBuffer ? physRow * ringW : -1
+      const vRow    = physRow * ringW
 
       for (let y = 0; y < canvasH; y++) {
-        const yf = this.flipFreqActual ? canvasH - 1 - y : y
-        // Map canvas row to frequency bin via zoom
-        const y0 = vs + ((yf       * span / canvasH) | 0)
-        const y1 = Math.min(ringW, vs + (((yf + 1) * span / canvasH) | 0))
-        let srcX = vs + (((yf + 0.5) * span / canvasH) | 0)
+        const yf    = this.flipFreqActual ? canvasH - 1 - y : y
+        const srcXf = vs + (yf + 0.5) * span / canvasH
+        const di    = (y * rc + x) * 4   // viewImg row=y, col=x (width=rowCount)
+        if (this.smoothPixels) {
+          const lo   = Math.max(vs,        Math.floor(srcXf))
+          const hi   = Math.min(ringW - 1, lo + 1)
+          const frac = srcXf - lo
+          const r0   = vb[vRow + lo]
+          const r1   = vb[vRow + hi]
+          const raw  = r0 + (r1 - r0) * frac
+          const t1   = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+          const t2   = gam !== 1 ? Math.pow(t1, gam) : t1
+          const idx  = Math.min(255, Math.max(0, Math.round(t2 * 255)))
+          dst[di]   = lut[idx * 3]
+          dst[di+1] = lut[idx * 3 + 1]
+          dst[di+2] = lut[idx * 3 + 2]
+          dst[di+3] = 255
+        } else {
+          // Map canvas row to frequency bin via zoom
+          const y0 = vs + ((yf       * span / canvasH) | 0)
+          const y1 = Math.min(ringW, vs + (((yf + 1) * span / canvasH) | 0))
+          let srcX = srcXf | 0
 
-        if (vRow >= 0 && y1 > y0 + 1 && y1 - y0 <= this.lazyThreshold) {
-          let bestVal = -1
-          for (let sx = y0; sx < y1; sx++) {
-            const v = this.valueBuffer![vRow + sx]
-            if (v > bestVal) { bestVal = v; srcX = sx }
-          }
-        } else if (vRow >= 0 && y1 > y0 + 1) {
-          const stride    = this.lazyThreshold
-          const firstGrid = Math.ceil(y0 / stride) * stride
-          if (firstGrid < y1) {
+          if (y1 > y0 + 1 && y1 - y0 <= this.lazyThreshold) {
             let bestVal = -1
-            for (let sx = firstGrid; sx < y1; sx += stride) {
-              const v = this.valueBuffer![vRow + sx]
+            for (let sx = y0; sx < y1; sx++) {
+              const v = vb[vRow + sx]
               if (v > bestVal) { bestVal = v; srcX = sx }
             }
+          } else if (y1 > y0 + 1) {
+            const stride    = this.lazyThreshold
+            const firstGrid = Math.ceil(y0 / stride) * stride
+            if (firstGrid < y1) {
+              let bestVal = -1
+              for (let sx = firstGrid; sx < y1; sx += stride) {
+                const v = vb[vRow + sx]
+                if (v > bestVal) { bestVal = v; srcX = sx }
+              }
+            }
           }
-        }
 
-        const si = (srcRow + srcX) * 4
-        const di = (y * rc + x) * 4   // viewImg row=y, col=x (width=rowCount)
-        dst[di]   = src[si]
-        dst[di+1] = src[si+1]
-        dst[di+2] = src[si+2]
-        dst[di+3] = src[si+3]
+          const raw = vb[vRow + srcX]
+          const t1  = Math.min(1, Math.max(0, (raw - sensLow) / sensSpan))
+          const t2  = gam !== 1 ? Math.pow(t1, gam) : t1
+          const idx = Math.min(255, Math.max(0, Math.round(t2 * 255)))
+          dst[di]   = lut[idx * 3]
+          dst[di+1] = lut[idx * 3 + 1]
+          dst[di+2] = lut[idx * 3 + 2]
+          dst[di+3] = 255
+        }
       }
     }
   }
@@ -568,6 +661,21 @@ export class WaterfallRenderer {
   private _loop(): void {
     const canvas = this.canvas
     const ctx    = this.ctx
+
+    if (this.smoothZoom && this.initialized) {
+      const alpha = 0.18
+      const ds = (this.targetStart - this.viewStart) * alpha
+      const de = (this.targetEnd   - this.viewEnd)   * alpha
+      if (Math.abs(ds) > 0.05 || Math.abs(de) > 0.05) {
+        this.viewStart += ds
+        this.viewEnd   += de
+        this.viewDirty  = true
+      } else if (this.viewStart !== this.targetStart || this.viewEnd !== this.targetEnd) {
+        this.viewStart = this.targetStart
+        this.viewEnd   = this.targetEnd
+        this.viewDirty = true
+      }
+    }
 
     if (canvas.width > 0 && canvas.height > 0 && ctx && (this.dirty || this.viewDirty)) {
       if (!this.viewImg || this.viewImg.width !== canvas.width || this.viewImg.height !== canvas.height) {
@@ -726,21 +834,29 @@ export class WaterfallRenderer {
     const ringW = this.ringWidth
     if (!ringW) return
 
-    const span         = this.viewEnd - this.viewStart
-    const factor       = e.deltaY > 0 ? 1.15 : 0.85
-    const newSpan      = Math.max(this.minSpan, Math.min(ringW, span * factor))
+    // Compound on target (not animated position) so rapid wheel events accumulate
+    const baseStart = this.smoothZoom ? this.targetStart : this.viewStart
+    const baseEnd   = this.smoothZoom ? this.targetEnd   : this.viewEnd
+    const span      = baseEnd - baseStart
+    const factor    = e.deltaY > 0 ? 1.15 : 0.85
+    const newSpan   = Math.max(this.minSpan, Math.min(ringW, span * factor))
     const cursorFrac = this.isHorizontal
       ? (this.flipFreqActual ? 1 - e.offsetY / this.canvas.clientHeight : e.offsetY / this.canvas.clientHeight)
       : (this.flipFreqActual ? 1 - e.offsetX / this.canvas.clientWidth  : e.offsetX / this.canvas.clientWidth)
-    const cursorSample = this.viewStart + cursorFrac * span
+    const cursorSample = baseStart + cursorFrac * span
 
     let newStart = cursorSample - cursorFrac * newSpan
     let newEnd   = newStart + newSpan
     if (newStart < 0)     { newStart = 0;     newEnd   = newSpan }
     if (newEnd   > ringW) { newEnd   = ringW; newStart = ringW - newSpan }
 
-    this.viewStart = Math.max(0, newStart)
-    this.viewEnd   = Math.min(ringW, newEnd)
+    if (this.smoothZoom) {
+      this.targetStart = Math.max(0, newStart)
+      this.targetEnd   = Math.min(ringW, newEnd)
+    } else {
+      this.viewStart = Math.max(0, newStart)
+      this.viewEnd   = Math.min(ringW, newEnd)
+    }
     this.viewDirty = true
   }
 
@@ -759,7 +875,8 @@ export class WaterfallRenderer {
       const span      = this.viewEnd - this.viewStart
       const clientPos = this.isHorizontal ? e.clientY : e.clientX
       const clientSz  = this.isHorizontal ? this.canvas.clientHeight : this.canvas.clientWidth
-      const dx        = ((clientPos - this.lastDragPos) / clientSz) * span
+      const sign      = this.flipFreqActual ? -1 : 1
+      const dx        = sign * ((clientPos - this.lastDragPos) / clientSz) * span
       this.lastDragPos = clientPos
 
       let newStart = this.viewStart - dx

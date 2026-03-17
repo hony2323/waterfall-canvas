@@ -163,10 +163,10 @@ describe('buildLut', () => {
 // ── normalizeValue ────────────────────────────────────────────────────────────
 
 describe('normalizeValue', () => {
-  describe('uint8 (0–100 range)', () => {
-    it('maps 0 → 0', ()   => expect(normalizeValue(0,   'uint8')).toBe(0))
-    it('maps 100 → 1', () => expect(normalizeValue(100, 'uint8')).toBe(1))
-    it('maps 50 → 0.5', () => expect(normalizeValue(50, 'uint8')).toBe(0.5))
+  describe('uint8 (0–255 range)', () => {
+    it('maps 0 → 0',   () => expect(normalizeValue(0,   'uint8')).toBe(0))
+    it('maps 255 → 1', () => expect(normalizeValue(255, 'uint8')).toBe(1))
+    it('maps 127.5 → ~0.5', () => expect(normalizeValue(127.5, 'uint8')).toBeCloseTo(0.5, 5))
   })
 
   describe('float32 (0–100 range, same as uint8)', () => {
