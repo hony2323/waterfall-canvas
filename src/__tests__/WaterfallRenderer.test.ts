@@ -201,10 +201,10 @@ describe('WaterfallRenderer — push', () => {
     expect(priv(renderer).valueBuffer).toBeInstanceOf(Float32Array)
   })
 
-  it('does not allocate valueBuffer when tooltip=false', () => {
+  it('always allocates valueBuffer (needed for live sensitivity/gamma re-render)', () => {
     renderer = new WaterfallRenderer(canvas, { tooltip: false })
     renderer.push(makeFrame())
-    expect(priv(renderer).valueBuffer).toBeNull()
+    expect(priv(renderer).valueBuffer).toBeInstanceOf(Float32Array)
   })
 
   it('allocates timeBuffer when timeBar=true', () => {
@@ -528,14 +528,14 @@ describe('WaterfallRenderer — isLazy boundary', () => {
     renderer.destroy()
   })
 
-  it('reports isLazy=false when tooltip is disabled regardless of zoom', () => {
+  it('reports isLazy=true when zoom ratio exceeds lazyThreshold (regardless of tooltip setting)', () => {
     const canvas = makeCanvas(100)
     const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: false, lazyThreshold: 4 })
     const metrics = vi.fn()
     renderer.onMetrics = metrics
-    renderer.push(makeFrame(1000))  // ratio=10 > 4 but no valueBuffer
+    renderer.push(makeFrame(1000))  // ratio=10 > 4, valueBuffer always allocated now
     runLoop(renderer)
-    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), false)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), true)
     renderer.destroy()
   })
 
