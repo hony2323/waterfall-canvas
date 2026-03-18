@@ -1,6 +1,6 @@
 # waterfall-canvas
 
-![waterfall-canvas demo](https://raw.githubusercontent.com/hony2323/waterfall-canvas/master/assets/demo.gif)
+![waterfall-canvas demo](https://raw.githubusercontent.com/hony2323/waterfall-canvas/master/assets/demo2.gif)
 
 High-performance waterfall / spectrogram canvas renderer with an optional React wrapper.
 
