@@ -201,10 +201,10 @@ describe('WaterfallRenderer — push', () => {
     expect(priv(renderer).valueBuffer).toBeInstanceOf(Float32Array)
   })
 
-  it('does not allocate valueBuffer when tooltip=false', () => {
+  it('always allocates valueBuffer (needed for live sensitivity/gamma re-render)', () => {
     renderer = new WaterfallRenderer(canvas, { tooltip: false })
     renderer.push(makeFrame())
-    expect(priv(renderer).valueBuffer).toBeNull()
+    expect(priv(renderer).valueBuffer).toBeInstanceOf(Float32Array)
   })
 
   it('allocates timeBuffer when timeBar=true', () => {
@@ -421,10 +421,10 @@ describe('WaterfallRenderer — ring cursor / row ordering', () => {
     const head    = p.headRow as number
     const ringW   = p.ringWidth as number
 
-    // value=60 → t=0.6 → LUT index=round(0.6×255)=153
-    expect(img.data[head * ringW * 4]).toBe(Math.round(0.6 * 255))
-    // second-newest (value=50 → 128) sits at next physical row
-    expect(img.data[((head + 1) % ROW_COUNT) * ringW * 4]).toBe(Math.round(0.5 * 255))
+    // value=60 → t=60/255 → LUT index=round(60/255×255)=60
+    expect(img.data[head * ringW * 4]).toBe(Math.round(60 / 255 * 255))
+    // second-newest (value=50 → 50) sits at next physical row
+    expect(img.data[((head + 1) % ROW_COUNT) * ringW * 4]).toBe(Math.round(50 / 255 * 255))
 
     renderer.destroy()
   })
@@ -446,14 +446,14 @@ describe('WaterfallRenderer — ring cursor / row ordering', () => {
       ordered.set(img.data.subarray(physRow * ringW * 4, (physRow + 1) * ringW * 4), y * ringW * 4)
     }
 
-    // Logical row 0 = newest (push 6, value=60 → 153)
-    expect(ordered[0 * ringW * 4]).toBe(Math.round(0.6 * 255))
-    // Logical row 1 = push 5 (value=50 → 128)
-    expect(ordered[1 * ringW * 4]).toBe(Math.round(0.5 * 255))
-    // Logical row 2 = push 4 (value=40 → 102)
-    expect(ordered[2 * ringW * 4]).toBe(Math.round(0.4 * 255))
-    // Logical row 3 = oldest surviving (push 3, value=30 → 77)
-    expect(ordered[3 * ringW * 4]).toBe(Math.round(0.3 * 255))
+    // Logical row 0 = newest (push 6, value=60 → 60)
+    expect(ordered[0 * ringW * 4]).toBe(Math.round(60 / 255 * 255))
+    // Logical row 1 = push 5 (value=50 → 50)
+    expect(ordered[1 * ringW * 4]).toBe(Math.round(50 / 255 * 255))
+    // Logical row 2 = push 4 (value=40 → 40)
+    expect(ordered[2 * ringW * 4]).toBe(Math.round(40 / 255 * 255))
+    // Logical row 3 = oldest surviving (push 3, value=30 → 30)
+    expect(ordered[3 * ringW * 4]).toBe(Math.round(30 / 255 * 255))
 
     renderer.destroy()
   })
@@ -473,8 +473,8 @@ describe('WaterfallRenderer — buffers after wraparound', () => {
     const head = p.headRow as number
     const ringW = p.ringWidth as number
 
-    expect(vb[head * ringW]).toBeCloseTo(0.6, 3)                              // push 6
-    expect(vb[((head + 1) % ROW_COUNT) * ringW]).toBeCloseTo(0.5, 3)         // push 5
+    expect(vb[head * ringW]).toBeCloseTo(60 / 255, 3)                              // push 6
+    expect(vb[((head + 1) % ROW_COUNT) * ringW]).toBeCloseTo(50 / 255, 3)         // push 5
 
     renderer.destroy()
   })
@@ -528,14 +528,14 @@ describe('WaterfallRenderer — isLazy boundary', () => {
     renderer.destroy()
   })
 
-  it('reports isLazy=false when tooltip is disabled regardless of zoom', () => {
+  it('reports isLazy=true when zoom ratio exceeds lazyThreshold (regardless of tooltip setting)', () => {
     const canvas = makeCanvas(100)
     const renderer = new WaterfallRenderer(canvas, { bufferWidth: 0, tooltip: false, lazyThreshold: 4 })
     const metrics = vi.fn()
     renderer.onMetrics = metrics
-    renderer.push(makeFrame(1000))  // ratio=10 > 4 but no valueBuffer
+    renderer.push(makeFrame(1000))  // ratio=10 > 4, valueBuffer always allocated now
     runLoop(renderer)
-    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), false)
+    expect(metrics).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), true)
     renderer.destroy()
   })
 

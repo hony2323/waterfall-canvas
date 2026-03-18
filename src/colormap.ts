@@ -43,10 +43,12 @@ export function buildLut(colorMap: (t: number) => [number, number, number]): Uin
 
 /**
  * Normalize a raw sample value to [0, 1] based on wire precision.
- * uint8 / float32 — backend sends values in the 0–100 range.
- * uint16           — full 0–65535 range.
+ * uint8   — full 0–255 range.
+ * uint16  — full 0–65535 range.
+ * float32 — backend sends values in the 0–100 range.
  */
 export function normalizeValue(value: number, precision: string): number {
   if (precision === 'uint16') return value / 65535
-  return value / 100  // uint8 and float32: 0–100
+  if (precision === 'uint8') return value / 255
+  return value / 100  // float32: 0–100
 }
